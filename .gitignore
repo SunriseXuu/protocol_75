@@ -1,0 +1,11 @@
+# Move build output
+build/
+
+# Aptos CLI config (private keys might be here if not careful, though usually in .aptos/config.yaml)
+.aptos/
+config.yaml
+
+# IDE/Editor settings
+.vscode/
+.idea/
+*.swp
