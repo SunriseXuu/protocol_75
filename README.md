@@ -43,55 +43,55 @@ protocol_75/
 
 ### Account System & Access
 
-- **Permissionless Access**: Built on the Aptos public chain; any address utilizing a compatible wallet protocol can access the protocol.
-- **Anti-Sybil Threshold**: Users are required to pay a one-time entry fee of 0.75 USDT to prevent Sybil attacks.
-- **Self-Discipline Credit**: Upon first access, a non-transferable Soulbound Token (SBT) is automatically minted as the carrier of the user's self-discipline credit.
-  - The SBT enforces a 1:1 binding with the hash fingerprint of the user's physical health account (e.g., Apple Health, Google Fit).
-  - As a Master Object, the SBT records core credit scores and possesses the capability to attach Sub-Objects (e.g., B-side commercial badges, winning streak badges), creating an aggregated asset structure.
+- **Permissionless Access**: Built on the **Aptos** public chain; any address utilizing a compatible wallet protocol can access the protocol.
+- **Anti-Sybil Threshold**: Users are required to pay a one-time entry fee of **0.75 USDT** to prevent Sybil attacks.
+- **Self-Discipline Credit**: Upon first access, a non-transferable **Soulbound Token (SBT)** is automatically minted as the carrier of the user's self-discipline credit.
+  - The SBT enforces a **1:1 binding** with the hash fingerprint of the user's physical health account (e.g., Apple Health, Google Fit).
+  - As a **Master Object**, the SBT records core credit scores and possesses the capability to attach **Sub-Objects** (e.g., B-side commercial badges, winning streak badges), creating an aggregated asset structure.
 
 ### Componentized Task System
 
-- **Task Component Library**: The protocol provides a library of standardized Atomic Task Components (e.g., Running, Sleep, Meditation).
-- **Free Combination**: Users have full autonomy to freely arrange and combine multiple atomic tasks with custom parameters (pledge amount, duration, intensity thresholds) to generate an independent "Task Object".
-- **Difficulty Synthesis**: The system utilizes on-chain algorithms to synthesize a real-time comprehensive Difficulty Coefficient based on the combination of task count, intensity, and pledge amount.
-- **Verification Standard**: The protocol accepts only signed hardware data from physical health accounts. It employs multi-dimensional cross-validation (GPS, heart rate, timestamps, etc.) to eliminate cheating (e.g., overlapping trajectories, simulator data). Private data remains local; only Zero-Knowledge Proofs (ZKP) or verification results are uploaded on-chain.
+- **Task Component Library**: The protocol provides a library of standardized **Atomic Task Components** (e.g., Running, Sleep, Meditation).
+- **Free Combination**: Users have full autonomy to freely arrange and combine multiple atomic tasks with custom parameters (pledge amount, duration, intensity thresholds) to generate an independent **"Task Object"**.
+- **Difficulty Synthesis**: The system utilizes on-chain algorithms to synthesize a real-time comprehensive **Difficulty Coefficient** based on the combination of task count, intensity, and pledge amount.
+- **Verification Standard**: The protocol accepts only **signed hardware data** from physical health accounts. It employs multi-dimensional cross-validation (GPS, heart rate, timestamps, etc.) to eliminate cheating (e.g., overlapping trajectories, simulator data). Private data remains local; only **Zero-Knowledge Proofs (ZKP)** or verification results are uploaded on-chain.
 
 ### Challenge Modes & Settlement
 
-- **Stablecoin Settlement**: Exclusively uses Aptos-native USDT / USDC for all pledging and settlement to eliminate crypto asset volatility risks.
+- **Stablecoin Settlement**: Exclusively uses Aptos-native **USDT/USDC** for all pledging and settlement to eliminate crypto asset volatility risks.
 - **Start Modes**:
-  - **Hash Team Start**: Regular users must start in squads of 4-7. The system identifies the squad identity based on the Team Hash derived from the combination of member addresses.
+  - **Hash Team Start**: Regular users must start in squads of 4-7. The system identifies the squad identity based on the **Team Hash** derived from the combination of member addresses.
   - **Whitelist Start**: Whitelisted protocol accounts (typically B-side merchants) can open challenges with unlimited participants (e.g., a 10,000-person marathon).
   - **Challenge Duration**: Generally set as integer multiples of a week.
 - **Collective Financial Liability**:
   - **All Clear**: If all members fulfill the contract, the principal is fully returned + the squad shares the underlying DeFi yield.
   - **Partial Default**: An internal compensation mechanism where the principal and interest of defaulting members are directly distributed equally among compliant teammates.
-  - **Team Wipe**: If all members default, the "Blackhole Mechanism" is triggered. All principal and interest are confiscated by the protocol (injected into Treasury/Charity); no refunds are issued.
+  - **Team Wipe**: If all members default, the **"Blackhole Mechanism"** is triggered. All principal and interest are confiscated by the protocol (injected into Treasury/Charity); no refunds are issued.
 - **Independent Credit**:
   - **Score Isolation**: SBT score changes depend solely on individual performance.
   - **No Collective Penalty**: If a teammate defaults, the compliant user's SBT credit score is not deducted.
 
 ### Asset Custody Model
 
-- **Principal Protection & Yield**: From start to finish, the protocol automatically invests pledged assets into verified on-chain principal-protected yield protocols (e.g., Aries Market or Thala). This acts as a logical lock-up.
-- **Non-Custodial Ownership**: After original funds enter DeFi protocols, the generated yield vouchers are returned and stored in the Move Resource Module under the user's account. The user holds the unique ownership voucher of this asset; the protocol cannot misappropriate it.
+- **Principal Protection & Yield**: From start to finish, the protocol automatically invests pledged assets into verified on-chain principal-protected yield protocols (e.g., **Aries Market** or **Thala**). This acts as a logical lock-up.
+- **Non-Custodial Ownership**: After original funds enter DeFi protocols, the generated yield vouchers are returned and stored in the **Move Resource Module** under the user's account. The user holds the unique ownership voucher of this asset; the protocol cannot misappropriate it.
 - **Escape Hatch**: If the off-chain settlement system fails to respond within a set timeframe (e.g., T+7 days), a forced withdrawal interface opens, allowing users to unconditionally retrieve their principal using their yield vouchers.
 
 ### Data Value & Rights
 
-- **Logistic Scoring**: SBT credit score changes follow a non-linear Logistic Algorithm, divided into four zones:
+- **Logistic Scoring**: SBT credit score changes follow a non-linear **Logistic Algorithm**, divided into four zones:
   - **35-50 (Recovery Zone)**: Aimed at rapid credit repair, but with restricted rights.
   - **50-75 (Accumulation Zone)**: Linear growth zone; easier to gain points, objectively reflecting the formation of compliance habits.
   - **75 (Benchmark Line)**: High credit threshold that unlocks expanded benefits.
   - **75-95 (Elite Zone)**: Asymptotic interval; extremely hard to gain points with doubled penalties for defaults. A perfect score is theoretically unreachable.
 - **Benefit Distribution**: Users with an SBT score >75 gain the right to participate in commercial tasks funded by B-side merchants (AI, Insurance, Brands) and earn high returns.
-- **RWE Contribution**: Verified performance data is treated as a contribution to Real World Evidence (RWE), forming human behavior datasets for AI industries, with returns calculated based on individual contribution.
+- **RWE Contribution**: Verified performance data is treated as a contribution to **Real World Evidence (RWE)**, forming human behavior datasets for AI industries, with returns calculated based on individual contribution.
 
 ### Protocol Economy & Revenue Model
 
-- **Yield Commission**: 8% of generated yield flows to the Treasury, 2% to Charity, and the remaining 90% belongs to the users.
-- **Liquidation Commission**: In the event of partial default, 4% of the forfeited funds flow to the Treasury, 1% to Charity. In the event of a Team Wipe, the protocol confiscates 80% of the pledged funds, with 20% flowing to Charity.
-- **B-side Commission**: When external institutions (Brands, Insurance, AI companies, etc.) open commercial positions (inject capital), 8% flows to the Treasury, 2% to Charity, and the remaining 90% forms the commercial prize pool.
+- **Yield Commission**: **8%** of generated yield flows to the **Treasury**, **2%** to **Charity**, and the remaining **90%** belongs to the **users**.
+- **Liquidation Commission**: In the event of partial default, **4%** of the forfeited funds flow to the **Treasury**, **1%** to **Charity**. In the event of a Team Wipe, the protocol confiscates **80%** of the pledged funds, with **20%** flowing to **Charity**.
+- **B-side Commission**: When external institutions (Brands, Insurance, AI companies, etc.) open commercial positions (inject capital), **8%** flows to the **Treasury**, **2%** to **Charity**, and the remaining **90%** forms the **commercial prize pool**.
 
 ## Protocol Architecture
 
