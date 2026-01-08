@@ -63,32 +63,19 @@ module protocol_75::asset_manager {
     }
 
     /// Seq 4.1: 清算资金 (仅限 Friend)
-    /// 根据 type 执行不同的资金处理逻辑
-    /// type 0: 全额退款 (任务成功)
-    /// type 1: 违约罚没 (本金分给受益人)
-    /// type 2: 团灭 (本金注入国库/燃烧)
+    /// 注意：asset_manager 只负责“解锁并提取”资金。
+    /// 具体的资金分配（退款/赔付/罚没）逻辑由上层 challenge_manager 完成。
     public(friend) fun liquidate_position(
-        user: address, liquidation_type: u8, _beneficiaries: vector<address>
+        user: address, _liquidation_type: u8, _beneficiaries: vector<address>
     ): Coin<AptosCoin> acquires YieldPosition {
         assert!(exists<YieldPosition>(user), E_NO_POSITION);
 
-        // 提取资源 (Move 2.0: move_from 直接解构)
+        // 1. 销毁资源，解构出本金
         let YieldPosition { principal, lock_until: _, team_hash: _ } =
             move_from<YieldPosition>(user);
 
-        // 逻辑分支
-        if (liquidation_type == 0) {
-            // 全额退款：直接返回 Coin 对象，由 Manager 转回给用户
-            principal
-        } else if (liquidation_type == 1) {
-            // 违约：逻辑上应该分给 beneficiaries，但在 asset 模块
-            // 我们只负责把钱拿出来，具体的拆分逻辑由 Manager 处理
-            // 这里简单返回全部本金，让 Manager 去拆分
-            principal
-        } else {
-            // 团灭：全部没收
-            principal
-        }
+        // 2. 直接返回本金对象
+        principal
     }
 
     /// 用户逃生舱 (Entry)
