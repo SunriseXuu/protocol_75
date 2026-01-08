@@ -7,8 +7,6 @@
 ///
 /// 主要用于链上验证用户的任务难度，作为发奖或激励的依据。
 module protocol_75::task_market {
-    #[test_only]
-    use std::vector;
 
     /// 任务参数数值异常（如为0）
     const E_INVALID_PARAM: u64 = 1;
@@ -117,6 +115,9 @@ module protocol_75::task_market {
         let task = new_task_type(task_id);
         task.weight
     }
+
+    #[test_only]
+    use std::vector;
 
     #[test]
     /// 测试正常情况下的难度计算
