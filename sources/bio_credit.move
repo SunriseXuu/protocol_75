@@ -99,6 +99,7 @@ module protocol_75::bio_credit {
         user: address, badge: Object<AchievementBadge>
     ) acquires BioSoul {
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
+        
         let soul = borrow_global_mut<BioSoul>(user);
         soul.badges.push_back(badge);
     }

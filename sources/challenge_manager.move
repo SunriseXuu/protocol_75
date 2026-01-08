@@ -11,8 +11,7 @@ module protocol_75::challenge_manager {
     use aptos_framework::coin;
     use aptos_framework::aptos_coin::AptosCoin;
 
-    // 引用所有底层模块
-    use protocol_75::task_market::{Self, TaskSpec};
+    use protocol_75::task_market;
     use protocol_75::bio_credit;
     use protocol_75::asset_manager;
     use protocol_75::badge_factory;
@@ -49,10 +48,24 @@ module protocol_75::challenge_manager {
     /// team_hash: 小队哈希
     public entry fun create_challenge(
         user: &signer,
-        task_spec: TaskSpec,
+        task_ids: vector<u8>,
+        task_params: vector<u64>,
         team_hash: vector<u8>,
         stake_amount: u64
     ) {
+        // 构造 TaskSpec
+        // 使用 helper 避免直接引用私有 Struct TaskType (如果未导入)
+        let tasks = vector::empty();
+        let len = task_ids.length();
+        let i = 0;
+        while (i < len) {
+            let id = task_ids[i];
+            let task = task_market::new_task_type(id);
+            tasks.push_back(task);
+            i += 1;
+        };
+        let task_spec = task_market::new_task_spec(tasks, task_params);
+
         // 1. 验证任务参数 (调用 task_market)
         // 虽然 calculate_difficulty 内部也会验，但这里显式验证更安全
         assert!(task_market::validate_spec(&task_spec), 0);
@@ -152,12 +165,14 @@ module protocol_75::challenge_manager {
         if (value == 0) {
             return string::utf8(b"0")
         };
+
         let buffer = vector::empty<u8>();
         while (value != 0) {
             buffer.push_back(((48 + value % 10) as u8));
             value /= 10;
         };
         buffer.reverse();
+
         string::utf8(buffer)
     }
 
@@ -189,8 +204,16 @@ module protocol_75::challenge_manager {
         bio_credit::register_user(user, vector::empty());
 
         // 5. 创建挑战 (质押 100)
-        let task_spec = task_market::new_task_spec(vector::empty(), vector::empty()); // 空任务仅作演示
-        create_challenge(user, task_spec, vector::empty(), 100);
+        // 使用非空列表以通过验证 (id=1 跑步, param=100米)
+        let task_ids = vector::singleton<u8>(1);
+        let task_params = vector::singleton<u64>(100);
+        create_challenge(
+            user,
+            task_ids,
+            task_params,
+            vector::empty(),
+            100
+        );
 
         // 6. 每日打卡
         submit_daily_checkin(user, 5000, b"sig");
