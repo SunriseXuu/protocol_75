@@ -125,20 +125,12 @@ module protocol_75::task_market {
 
     /// 创建一个 Task
     public fun create_task(task_id: u8, goal: u64): Task {
-        let task_limit = get_task_limits(task_id);
-
         // 任务目标边界检查
-        let is_goal_invalid =
-            if (task_id == TASK_CALORIES_BURNED) {
-                goal < task_limit.goal_min
-            } else if (task_id == TASK_EXERCISE_DURATION) {
-                goal < task_limit.goal_min
-            } else if (task_id == TASK_SLEEP_DURATION) {
-                goal < task_limit.goal_min || goal > task_limit.goal_max
-            } else if (task_id == TASK_MEDITATION_DURATION) {
-                goal < task_limit.goal_min
-            } else { false };
-        assert!(!is_goal_invalid, E_INVALID_TASK_GOAL);
+        let task_limit = get_task_limits(task_id);
+        assert!(
+            goal >= task_limit.goal_min && goal <= task_limit.goal_max,
+            E_INVALID_TASK_GOAL
+        );
 
         Task { id: task_id, goal }
     }
