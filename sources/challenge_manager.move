@@ -60,22 +60,18 @@ module protocol_75::challenge_manager {
         let i = 0;
         while (i < len) {
             let id = task_ids[i];
-            let task = task_market::new_task_type(id);
+            let task = task_market::create_task(id, task_params[i]);
             tasks.push_back(task);
             i += 1;
         };
-        let task_spec = task_market::new_task_spec(tasks, task_params);
+        task_market::create_task_combo(tasks);
 
-        // 1. 验证任务参数 (调用 task_market)
-        // 虽然 calculate_difficulty 内部也会验，但这里显式验证更安全
-        assert!(task_market::validate_spec(&task_spec), 0);
-
-        // 2. 提取资金 (从用户钱包取钱)
+        // 1. 提取资金 (从用户钱包取钱)
         // 真实场景：需要先 coin::withdraw 出来
         // 注意：Aptos 中 entry 函数不能直接传 Coin 对象，所以得在这里 withdraw
         let coins = coin::withdraw<AptosCoin>(user, stake_amount);
 
-        // 3. 存入资产管理器 (调用 asset_manager)
+        // 2. 存入资产管理器 (调用 asset_manager)
         // 假设锁定 7 天 (604800秒)
         asset_manager::deposit_and_stake(user, coins, team_hash, 604800);
     }
