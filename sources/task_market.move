@@ -40,31 +40,31 @@ module protocol_75::task_market {
     /// 冥想时长任务ID
     const TASK_MEDITATION_DURATION: u8 = 4;
 
-    /// u64 最大值
+    /// u64 最大值 - 用于表示无上限
     const MAX_U64: u64 = 18446744073709551615;
 
     /// 原子任务
     struct Task has copy, drop, store {
-        id: u8,
-        goal: u64
+        id: u8, // 任务 ID
+        goal: u64 // 任务目标
     }
 
     /// 任务组合
     struct TaskCombo has copy, drop, store {
-        tasks: vector<Task>
+        tasks: vector<Task> // 任务列表
     }
 
     /// 任务限制
     struct TaskLimit has copy, drop, store {
         weight: u64, // 任务权重
-        min: u64, // 任务目标下限
-        max: u64 // 任务目标上限
+        goal_min: u64, // 任务目标下限
+        goal_max: u64 // 任务目标上限
     }
 
     /// 任务配置 (单例资源，存储在 Admin 账户下)
     struct TaskConfig has key {
-        task_names: Table<u8, vector<u8>>,
-        task_limits: Table<u8, TaskLimit>
+        task_names: Table<u8, vector<u8>>, // 任务名称
+        task_limits: Table<u8, TaskLimit> // 任务限制
     }
 
     /// 模块初始化：设置默认配置
@@ -80,21 +80,21 @@ module protocol_75::task_market {
         // 初始化默认任务限制
         let task_limits = table::new<u8, TaskLimit>();
 
+        // 卡路里消耗 - 默认下限 200千卡
         task_limits.add(
-            1, // 卡路里消耗
-            TaskLimit { weight: 1, min: 200, max: MAX_U64 } // 默认下限 200千卡
+            1, TaskLimit { weight: 1, goal_min: 200, goal_max: MAX_U64 }
         );
+        // 锻炼时长 - 默认下限 30分钟
         task_limits.add(
-            2, // 锻炼时长
-            TaskLimit { weight: 10, min: 30, max: MAX_U64 } // 默认下限 30分钟
+            2, TaskLimit { weight: 10, goal_min: 30, goal_max: MAX_U64 }
         );
+        // 合规睡眠时长 - 默认下限 7小时 上限 9小时
         task_limits.add(
-            3, // 合规睡眠时长
-            TaskLimit { weight: 1, min: 420, max: 540 } // 默认下限 7小时，上限 9小时
+            3, TaskLimit { weight: 1, goal_min: 420, goal_max: 540 }
         );
+        // 冥想时长 - 默认下限 10分钟
         task_limits.add(
-            4, // 冥想时长
-            TaskLimit { weight: 20, min: 10, max: MAX_U64 } // 默认下限 10分钟
+            4, TaskLimit { weight: 20, goal_min: 10, goal_max: MAX_U64 }
         );
 
         // 创建任务配置到 Admin 账户
@@ -106,19 +106,19 @@ module protocol_75::task_market {
         admin: &signer,
         task_id: u8,
         weight: u64,
-        min: u64,
-        max: u64
+        goal_min: u64,
+        goal_max: u64
     ) {
         assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        assert!(min <= max, E_INVALID_LIMITS);
+        assert!(goal_min <= goal_max, E_INVALID_LIMITS);
 
         let task_limits = &mut borrow_global_mut<TaskConfig>(@protocol_75).task_limits;
 
         if (task_limits.contains(task_id)) {
-            *task_limits.borrow_mut(task_id) = TaskLimit { weight, min, max };
+            *task_limits.borrow_mut(task_id) = TaskLimit { weight, goal_min, goal_max };
         } else {
             task_limits.add(
-                task_id, TaskLimit { weight, min, max }
+                task_id, TaskLimit { weight, goal_min, goal_max }
             );
         }
     }
@@ -130,13 +130,13 @@ module protocol_75::task_market {
         // 任务目标边界检查
         let is_goal_invalid =
             if (task_id == TASK_CALORIES_BURNED) {
-                goal < task_limit.min
+                goal < task_limit.goal_min
             } else if (task_id == TASK_EXERCISE_DURATION) {
-                goal < task_limit.min
+                goal < task_limit.goal_min
             } else if (task_id == TASK_SLEEP_DURATION) {
-                goal < task_limit.min || goal > task_limit.max
+                goal < task_limit.goal_min || goal > task_limit.goal_max
             } else if (task_id == TASK_MEDITATION_DURATION) {
-                goal < task_limit.min
+                goal < task_limit.goal_min
             } else { false };
         assert!(!is_goal_invalid, E_INVALID_TASK_GOAL);
 
@@ -164,7 +164,7 @@ module protocol_75::task_market {
     }
 
     #[view]
-    /// 视图函数：获取某个任务ID的限制
+    /// 视图函数：获取某个任务的限制
     public fun get_task_limits(task_id: u8): TaskLimit {
         let task_limits = &borrow_global<TaskConfig>(@protocol_75).task_limits;
         assert!(task_limits.contains(task_id), E_INVALID_TASK_ID);
@@ -231,7 +231,7 @@ module protocol_75::task_market {
     /// - Admin 修改配置：将睡眠权重改为 2
     /// - Admin 修改配置：将睡眠限制改为 500-800分钟
     /// - Admin 新增任务：任务代号 4，带有上下限
-    /// 预期结果：总难度 960
+    /// 预期结果：全部通过
     fun test_upsert_task(admin: &signer) {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
