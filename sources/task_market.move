@@ -22,16 +22,14 @@ module protocol_75::task_market {
     use std::signer;
     use aptos_std::table::{Self, Table};
 
-    /// 无效的任务ID
+    /// 无效的任务 ID
     const E_INVALID_TASK_ID: u64 = 4;
     /// 无效的任务目标
     const E_INVALID_TASK_GOAL: u64 = 1;
     /// 权限不足 (非管理员)
     const E_NOT_ADMIN: u64 = 2;
-    /// 配置未初始化
-    const E_CONFIG_NOT_FOUND: u64 = 3;
     /// 限制设置错误 (Min > Max)
-    const E_INVALID_LIMITS: u64 = 5;
+    const E_INVALID_LIMITS: u64 = 3;
 
     /// 卡路里消耗任务ID
     const TASK_CALORIES_BURNED: u8 = 1;
@@ -41,6 +39,9 @@ module protocol_75::task_market {
     const TASK_SLEEP_DURATION: u8 = 3;
     /// 冥想时长任务ID
     const TASK_MEDITATION_DURATION: u8 = 4;
+
+    /// u64 最大值
+    const MAX_U64: u64 = 18446744073709551615;
 
     /// 原子任务
     struct Task has copy, drop, store {
@@ -53,125 +54,89 @@ module protocol_75::task_market {
         tasks: vector<Task>
     }
 
+    /// 任务限制
+    struct TaskLimit has copy, drop, store {
+        weight: u64, // 任务权重
+        min: u64, // 任务目标下限
+        max: u64 // 任务目标上限
+    }
+
     /// 任务配置 (单例资源，存储在 Admin 账户下)
     struct TaskConfig has key {
-        // 映射关系：Task ID (u8) -> Weight (u64)
-        // 我们人为约定：Calories=1, Exercise=2, Sleep=3, Meditation=4
-        task_weights: Table<u8, u64>,
-
-        // 卡路里消耗限制配置
-        task_calories_min: u64,
-
-        // 锻炼时长限制配置
-        task_exercise_min: u64,
-
-        // 睡眠限制配置
-        task_sleep_min: u64,
-        task_sleep_max: u64,
-
-        // 冥想时长限制配置
-        task_meditation_min: u64
+        task_names: Table<u8, vector<u8>>,
+        task_limits: Table<u8, TaskLimit>
     }
 
     /// 模块初始化：设置默认配置
     fun init_module(admin: &signer) {
-        // 初始化默认权重
-        let weights = table::new();
-        weights.add(1, 1);
-        weights.add(2, 10);
-        weights.add(3, 1);
-        weights.add(4, 20);
+        // 初始化默认任务名称
+        let task_names = table::new<u8, vector<u8>>();
+
+        task_names.add(1, b"Calories Burned");
+        task_names.add(2, b"Exercise Duration");
+        task_names.add(3, b"Sleep Duration");
+        task_names.add(4, b"Meditation Duration");
+
+        // 初始化默认任务限制
+        let task_limits = table::new<u8, TaskLimit>();
+
+        task_limits.add(
+            1, // 卡路里消耗
+            TaskLimit { weight: 1, min: 200, max: MAX_U64 } // 默认下限 200千卡
+        );
+        task_limits.add(
+            2, // 锻炼时长
+            TaskLimit { weight: 10, min: 30, max: MAX_U64 } // 默认下限 30分钟
+        );
+        task_limits.add(
+            3, // 合规睡眠时长
+            TaskLimit { weight: 1, min: 420, max: 540 } // 默认下限 7小时，上限 9小时
+        );
+        task_limits.add(
+            4, // 冥想时长
+            TaskLimit { weight: 20, min: 10, max: MAX_U64 } // 默认下限 10分钟
+        );
 
         // 创建任务配置到 Admin 账户
-        move_to(
-            admin,
-            TaskConfig {
-                task_weights: weights,
-                task_calories_min: 200, // 默认卡路里消耗下限 200千卡
-                task_exercise_min: 30, // 默认锻炼时长下限 30分钟
-                task_sleep_min: 420, // 默认合法的睡眠时长下限 7小时
-                task_sleep_max: 540, // 默认合法的睡眠时长上限 9小时
-                task_meditation_min: 10 // 默认冥想时长下限 10分钟
-            }
-        );
+        move_to(admin, TaskConfig { task_names, task_limits });
     }
 
-    /// 管理员入口：新增一个任务
-    public entry fun add_task(admin: &signer, task_id: u8, weight: u64) {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-
-        let task_weights = &mut borrow_global_mut<TaskConfig>(@protocol_75).task_weights;
-        assert!(!task_weights.contains(task_id), E_INVALID_TASK_ID);
-
-        task_weights.add(task_id, weight);
-    }
-
-    /// 管理员入口：更新某个任务的权重
-    public entry fun update_task_weight(
-        admin: &signer, task_id: u8, new_weight: u64
+    /// 管理员入口：更新或新增一个任务
+    public entry fun upsert_task(
+        admin: &signer,
+        task_id: u8,
+        weight: u64,
+        min: u64,
+        max: u64
     ) {
         assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
+        assert!(min <= max, E_INVALID_LIMITS);
 
-        let task_weights = &mut borrow_global_mut<TaskConfig>(@protocol_75).task_weights;
-        assert!(task_weights.contains(task_id), E_INVALID_TASK_ID);
+        let task_limits = &mut borrow_global_mut<TaskConfig>(@protocol_75).task_limits;
 
-        task_weights.add(task_id, new_weight);
-    }
-
-    /// 管理员入口：更新卡路里消耗任务的参数的合法范围
-    public entry fun update_task_calories(admin: &signer, min: u64) {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        assert!(min > 0, E_INVALID_LIMITS);
-
-        let config = borrow_global_mut<TaskConfig>(@protocol_75);
-        config.task_calories_min = min;
-    }
-
-    /// 管理员入口：更新锻炼时长任务的参数的合法范围
-    public entry fun update_task_exercise(admin: &signer, min: u64) {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        assert!(min > 0, E_INVALID_LIMITS);
-
-        let config = borrow_global_mut<TaskConfig>(@protocol_75);
-        config.task_exercise_min = min;
-    }
-
-    /// 管理员入口：更新睡眠任务的参数的合法范围
-    public entry fun update_task_sleep(admin: &signer, min: u64, max: u64) {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        assert!(min < max, E_INVALID_LIMITS);
-
-        let config = borrow_global_mut<TaskConfig>(@protocol_75);
-        config.task_sleep_min = min;
-        config.task_sleep_max = max;
-    }
-
-    /// 管理员入口：更新冥想任务的参数的合法范围
-    public entry fun update_task_meditation(admin: &signer, min: u64) {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        assert!(min > 0, E_INVALID_LIMITS);
-
-        let config = borrow_global_mut<TaskConfig>(@protocol_75);
-        config.task_meditation_min = min;
+        if (task_limits.contains(task_id)) {
+            *task_limits.borrow_mut(task_id) = TaskLimit { weight, min, max };
+        } else {
+            task_limits.add(
+                task_id, TaskLimit { weight, min, max }
+            );
+        }
     }
 
     /// 创建一个 Task
     public fun create_task(task_id: u8, goal: u64): Task {
-        let config = borrow_global<TaskConfig>(@protocol_75);
-
-        // 任务ID检查
-        assert!(config.task_weights.contains(task_id), E_INVALID_TASK_ID);
+        let task_limit = get_task_limits(task_id);
 
         // 任务目标边界检查
         let is_goal_invalid =
             if (task_id == TASK_CALORIES_BURNED) {
-                goal < config.task_calories_min
+                goal < task_limit.min
             } else if (task_id == TASK_EXERCISE_DURATION) {
-                goal < config.task_exercise_min
+                goal < task_limit.min
             } else if (task_id == TASK_SLEEP_DURATION) {
-                goal < config.task_sleep_min || goal > config.task_sleep_max
+                goal < task_limit.min || goal > task_limit.max
             } else if (task_id == TASK_MEDITATION_DURATION) {
-                goal < config.task_meditation_min
+                goal < task_limit.min
             } else { false };
         assert!(!is_goal_invalid, E_INVALID_TASK_GOAL);
 
@@ -190,22 +155,21 @@ module protocol_75::task_market {
 
         for (i in 0..len) {
             let task = &task_combo.tasks[i];
-            let weight = get_task_weight(task.id);
+            let task_limit = get_task_limits(task.id);
 
-            total_difficulty += weight * task.goal;
+            total_difficulty += task_limit.weight * task.goal;
         };
 
         total_difficulty
     }
 
     #[view]
-    /// 视图函数：获取某个任务ID的权重
-    public fun get_task_weight(task_id: u8): u64 {
-        let task_weights = &borrow_global<TaskConfig>(@protocol_75).task_weights;
+    /// 视图函数：获取某个任务ID的限制
+    public fun get_task_limits(task_id: u8): TaskLimit {
+        let task_limits = &borrow_global<TaskConfig>(@protocol_75).task_limits;
+        assert!(task_limits.contains(task_id), E_INVALID_TASK_ID);
 
-        if (task_weights.contains(task_id)) {
-            *task_weights.borrow(task_id)
-        } else { 0 }
+        *task_limits.borrow(task_id)
     }
 
     #[test_only]
@@ -213,6 +177,12 @@ module protocol_75::task_market {
 
     #[test_only]
     use aptos_framework::account;
+
+    #[test_only]
+    /// 为其他模块提供 init_module 的接口
+    public fun init_module_for_test(admin: &signer) {
+        init_module(admin);
+    }
 
     #[test(admin = @protocol_75)]
     /// 测试正常情况下的难度计算
@@ -234,21 +204,20 @@ module protocol_75::task_market {
 
         // 计算：(1 * 300) + (10 * 30) = 300 + 300 = 600
         let difficulty = calculate_difficulty(&task_combo);
-
         assert!(difficulty == 600, 0);
     }
 
     #[test(admin = @protocol_75)]
-    #[expected_failure(abort_code = E_INVALID_TASK)]
-    /// 测试错误处理：非法参数
+    #[expected_failure(abort_code = E_INVALID_TASK_GOAL)]
+    /// 测试错误处理：非法任务目标
     /// 场景：任务参数为0（例如消耗0卡路里）
-    /// 预期结果：触发 E_INVALID_TASK 错误并中止
-    fun test_fail_zero_param(admin: &signer) {
+    /// 预期结果：触发 E_INVALID_TASK_GOAL 错误并中止
+    fun test_fail_goal(admin: &signer) {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
         // 测试非法参数：消耗 0 kcal (小于配置)
-        let tasks = vector::singleton(create_task(1, 0));
+        let tasks = vector::singleton<Task>(create_task(1, 0));
         let task_combo = create_task_combo(tasks);
 
         // 应该报错
@@ -256,30 +225,36 @@ module protocol_75::task_market {
     }
 
     #[test(admin = @protocol_75)]
-    /// 测试配置逻辑
+    /// 测试 upsert 任务
     /// 场景：
     /// - Admin 创建任务：睡眠 8小时 (480分钟)
     /// - Admin 修改配置：将睡眠权重改为 2
+    /// - Admin 修改配置：将睡眠限制改为 500-800分钟
+    /// - Admin 新增任务：任务代号 4，带有上下限
     /// 预期结果：总难度 960
-    fun test_config_logic(admin: &signer) {
+    fun test_upsert_task(admin: &signer) {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
-        let tasks = vector::empty();
         // 睡眠 480 (在 420-540 之间) -> 合法
-        tasks.push_back(create_task(TASK_SLEEP_DURATION, 480));
+        let tasks = vector::singleton<Task>(create_task(TASK_SLEEP_DURATION, 480));
         let task_combo = create_task_combo(tasks);
-
         assert!(calculate_difficulty(&task_combo) == 480, 0);
 
         // 修改权重
-        update_task_weight(admin, TASK_SLEEP_DURATION, 2);
+        upsert_task(admin, TASK_SLEEP_DURATION, 2, 420, 540);
         assert!(calculate_difficulty(&task_combo) == 960, 1);
 
-        // 修改限制
-        update_task_sleep(admin, 500, 800);
-        // 480 < 500，现在非法了，但是已经存在的任务组合不受影响
+        // 修改任务限制
+        upsert_task(admin, TASK_SLEEP_DURATION, 2, 500, 800);
+        // 480 < 500，虽然非法了，但是已经存在的任务组合不受影响
         assert!(calculate_difficulty(&task_combo) == 960, 2);
+
+        // 新增任务 4, 权重 25，上下限 10-120
+        upsert_task(admin, 4, 25, 10, 120);
+        let tasks = vector::singleton<Task>(create_task(4, 80));
+        let task_combo = create_task_combo(tasks);
+        assert!(calculate_difficulty(&task_combo) == 2000, 3);
     }
 }
 

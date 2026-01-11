@@ -43,7 +43,8 @@ module protocol_75::challenge_manager {
 
     /// Seq 2: 创建挑战
     /// user: 发起人
-    /// spec: 任务规格
+    /// task_ids: 任务 ID 列表
+    /// task_params: 任务参数列表
     /// stake_amount: 质押金额
     /// team_hash: 小队哈希
     public entry fun create_challenge(
@@ -53,7 +54,7 @@ module protocol_75::challenge_manager {
         team_hash: vector<u8>,
         stake_amount: u64
     ) {
-        // 构造 TaskSpec
+        // 构造 TaskCombo
         // 使用 helper 避免直接引用私有 Struct TaskType (如果未导入)
         let tasks = vector::empty();
         let len = task_ids.length();
@@ -188,6 +189,7 @@ module protocol_75::challenge_manager {
 
         // 2. 初始化合约 (模拟部署)
         init_module(admin);
+        task_market::init_module_for_test(admin); // Initialize task_market for tests
 
         // 3. 准备用户
         let user_addr = signer::address_of(user);
@@ -202,7 +204,7 @@ module protocol_75::challenge_manager {
         // 5. 创建挑战 (质押 100)
         // 使用非空列表以通过验证 (id=1 跑步, param=100米)
         let task_ids = vector::singleton<u8>(1);
-        let task_params = vector::singleton<u64>(100);
+        let task_params = vector::singleton<u64>(300);
         create_challenge(
             user,
             task_ids,
