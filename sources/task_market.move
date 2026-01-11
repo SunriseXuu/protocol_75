@@ -41,7 +41,7 @@ module protocol_75::task_market {
     const TASK_MEDITATION_DURATION: u8 = 4;
 
     /// u64 最大值 - 用于表示无上限
-    const MAX_U64: u64 = 18446744073709551615;
+    const U64_MAX: u64 = 18446744073709551615;
 
     /// 原子任务
     struct Task has copy, drop, store {
@@ -82,11 +82,11 @@ module protocol_75::task_market {
 
         // 卡路里消耗 - 默认下限 200千卡
         task_limits.add(
-            1, TaskLimit { weight: 1, goal_min: 200, goal_max: MAX_U64 }
+            1, TaskLimit { weight: 1, goal_min: 200, goal_max: U64_MAX }
         );
         // 锻炼时长 - 默认下限 30分钟
         task_limits.add(
-            2, TaskLimit { weight: 10, goal_min: 30, goal_max: MAX_U64 }
+            2, TaskLimit { weight: 10, goal_min: 30, goal_max: U64_MAX }
         );
         // 合规睡眠时长 - 默认下限 7小时 上限 9小时
         task_limits.add(
@@ -94,7 +94,7 @@ module protocol_75::task_market {
         );
         // 冥想时长 - 默认下限 10分钟
         task_limits.add(
-            4, TaskLimit { weight: 20, goal_min: 10, goal_max: MAX_U64 }
+            4, TaskLimit { weight: 20, goal_min: 10, goal_max: U64_MAX }
         );
 
         // 创建任务配置到 Admin 账户
