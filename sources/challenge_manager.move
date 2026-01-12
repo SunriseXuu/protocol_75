@@ -61,7 +61,7 @@ module protocol_75::challenge_manager {
         let i = 0;
         while (i < len) {
             let id = task_ids[i];
-            let task = task_market::create_task(id, task_params[i]);
+            let task = task_market::create_task_atom(id, task_params[i]);
             tasks.push_back(task);
             i += 1;
         };

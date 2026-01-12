@@ -1,7 +1,7 @@
 /// 任务市场模块 - Task Market Module
 ///
 /// 功能描述：
-/// - 定义原子任务类型，包括：
+/// - 定义任务原子类型，包括：
 ///   - 卡路里消耗 calories_burned - id: 1
 ///   - 锻炼时长 exercise_duration - id: 2
 ///   - 合规睡眠时长 sleep_duration - id: 3
@@ -31,27 +31,18 @@ module protocol_75::task_market {
     /// 限制设置错误 (Min > Max)
     const E_INVALID_LIMITS: u64 = 3;
 
-    /// 卡路里消耗任务ID
-    const TASK_CALORIES_BURNED: u8 = 1;
-    /// 锻炼时长任务ID
-    const TASK_EXERCISE_DURATION: u8 = 2;
-    /// 合规睡眠时长任务ID
-    const TASK_SLEEP_DURATION: u8 = 3;
-    /// 冥想时长任务ID
-    const TASK_MEDITATION_DURATION: u8 = 4;
-
     /// u64 最大值 - 用于表示无上限
     const U64_MAX: u64 = 18446744073709551615;
 
-    /// 原子任务
-    struct Task has copy, drop, store {
+    /// 任务原子
+    struct TaskAtom has copy, drop, store {
         id: u8, // 任务 ID
         goal: u64 // 任务目标
     }
 
     /// 任务组合
     struct TaskCombo has copy, drop, store {
-        tasks: vector<Task> // 任务列表
+        task_atoms: vector<TaskAtom> // 任务列表
     }
 
     /// 任务限制
@@ -104,7 +95,7 @@ module protocol_75::task_market {
     /// 管理员入口：更新或新增一个任务
     public entry fun upsert_task(
         admin: &signer,
-        task_id: u8,
+        id: u8,
         weight: u64,
         goal_min: u64,
         goal_max: u64
@@ -114,42 +105,42 @@ module protocol_75::task_market {
 
         let task_limits = &mut borrow_global_mut<TaskConfig>(@protocol_75).task_limits;
 
-        if (task_limits.contains(task_id)) {
-            *task_limits.borrow_mut(task_id) = TaskLimit { weight, goal_min, goal_max };
+        if (task_limits.contains(id)) {
+            *task_limits.borrow_mut(id) = TaskLimit { weight, goal_min, goal_max };
         } else {
             task_limits.add(
-                task_id, TaskLimit { weight, goal_min, goal_max }
+                id, TaskLimit { weight, goal_min, goal_max }
             );
         }
     }
 
-    /// 创建一个 Task
-    public fun create_task(task_id: u8, goal: u64): Task {
+    /// 创建一个任务原子
+    public fun create_task_atom(id: u8, goal: u64): TaskAtom {
         // 任务目标边界检查
-        let task_limit = get_task_limits(task_id);
+        let task_limit = get_task_limits(id);
         assert!(
             goal >= task_limit.goal_min && goal <= task_limit.goal_max,
             E_INVALID_TASK_GOAL
         );
 
-        Task { id: task_id, goal }
+        TaskAtom { id, goal }
     }
 
-    /// 创建一个 TaskCombo
-    public fun create_task_combo(tasks: vector<Task>): TaskCombo {
-        TaskCombo { tasks }
+    /// 创建一个任务组合
+    public fun create_task_combo(task_atoms: vector<TaskAtom>): TaskCombo {
+        TaskCombo { task_atoms }
     }
 
     /// 计算综合难度系数 - e.g. Sum(TaskWeight * Param)
     public fun calculate_difficulty(task_combo: &TaskCombo): u64 {
         let total_difficulty = 0;
-        let len = task_combo.tasks.length();
+        let len = task_combo.task_atoms.length();
 
         for (i in 0..len) {
-            let task = &task_combo.tasks[i];
-            let task_limit = get_task_limits(task.id);
+            let task_atom = &task_combo.task_atoms[i];
+            let task_limit = get_task_limits(task_atom.id);
 
-            total_difficulty += task_limit.weight * task.goal;
+            total_difficulty += task_limit.weight * task_atom.goal;
         };
 
         total_difficulty
@@ -157,11 +148,11 @@ module protocol_75::task_market {
 
     #[view]
     /// 视图函数：获取某个任务的限制
-    public fun get_task_limits(task_id: u8): TaskLimit {
+    public fun get_task_limits(id: u8): TaskLimit {
         let task_limits = &borrow_global<TaskConfig>(@protocol_75).task_limits;
-        assert!(task_limits.contains(task_id), E_INVALID_TASK_ID);
+        assert!(task_limits.contains(id), E_INVALID_TASK_ID);
 
-        *task_limits.borrow(task_id)
+        *task_limits.borrow(id)
     }
 
     #[test_only]
@@ -179,20 +170,20 @@ module protocol_75::task_market {
     #[test(admin = @protocol_75)]
     /// 测试正常情况下的难度计算
     /// 场景：
-    /// - 任务1：消耗卡路里（权重1），参数300 kcal -> 300
-    /// - 任务2：锻炼时长（权重10），参数20 min -> 200
+    /// - 任务原子 1：消耗卡路里（权重1），参数300 kcal -> 300
+    /// - 任务原子 2：锻炼时长（权重10），参数20 min -> 200
     /// 预期结果：总难度 600
     fun test_calculate_difficulty(admin: &signer) {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
-        // 准备任务
-        let tasks = vector::empty<Task>();
+        // 准备任务原子
+        let task_atoms = vector::empty<TaskAtom>();
         // 卡路里 300 > 200 (Min), 锻炼 30 >= 30 (Min) -> 合法
-        tasks.push_back(create_task(1, 300));
-        tasks.push_back(create_task(2, 30));
+        task_atoms.push_back(create_task_atom(1, 300));
+        task_atoms.push_back(create_task_atom(2, 30));
 
-        let task_combo = create_task_combo(tasks);
+        let task_combo = create_task_combo(task_atoms);
 
         // 计算：(1 * 300) + (10 * 30) = 300 + 300 = 600
         let difficulty = calculate_difficulty(&task_combo);
@@ -209,8 +200,8 @@ module protocol_75::task_market {
         init_module(admin);
 
         // 测试非法参数：消耗 0 kcal (小于配置)
-        let tasks = vector::singleton<Task>(create_task(1, 0));
-        let task_combo = create_task_combo(tasks);
+        let task_atoms = vector::singleton<TaskAtom>(create_task_atom(1, 0));
+        let task_combo = create_task_combo(task_atoms);
 
         // 应该报错
         calculate_difficulty(&task_combo);
@@ -228,24 +219,29 @@ module protocol_75::task_market {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
+        // 声明睡眠时长任务 ID
+        let task_sleep_duration = 3;
+
         // 睡眠 480 (在 420-540 之间) -> 合法
-        let tasks = vector::singleton<Task>(create_task(TASK_SLEEP_DURATION, 480));
-        let task_combo = create_task_combo(tasks);
+        let task_atoms = vector::singleton<TaskAtom>(
+            create_task_atom(task_sleep_duration, 480)
+        );
+        let task_combo = create_task_combo(task_atoms);
         assert!(calculate_difficulty(&task_combo) == 480, 0);
 
-        // 修改权重
-        upsert_task(admin, TASK_SLEEP_DURATION, 2, 420, 540);
+        // 修改任务原子权重
+        upsert_task(admin, task_sleep_duration, 2, 420, 540);
         assert!(calculate_difficulty(&task_combo) == 960, 1);
 
-        // 修改任务限制
-        upsert_task(admin, TASK_SLEEP_DURATION, 2, 500, 800);
+        // 修改任务原子限制
+        upsert_task(admin, task_sleep_duration, 2, 500, 800);
         // 480 < 500，虽然非法了，但是已经存在的任务组合不受影响
         assert!(calculate_difficulty(&task_combo) == 960, 2);
 
-        // 新增任务 4, 权重 25，上下限 10-120
+        // 新增任务原子，权重 25，上下限 10-120
         upsert_task(admin, 4, 25, 10, 120);
-        let tasks = vector::singleton<Task>(create_task(4, 80));
-        let task_combo = create_task_combo(tasks);
+        let task_atoms = vector::singleton<TaskAtom>(create_task_atom(4, 80));
+        let task_combo = create_task_combo(task_atoms);
         assert!(calculate_difficulty(&task_combo) == 2000, 3);
     }
 }
