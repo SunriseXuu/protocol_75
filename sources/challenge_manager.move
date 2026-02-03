@@ -61,11 +61,11 @@ module protocol_75::challenge_manager {
         let i = 0;
         while (i < len) {
             let id = task_ids[i];
-            let task = task_market::create_task_atom(id, task_params[i]);
+            let task = task_market::new_task_atom(id, task_params[i]);
             tasks.push_back(task);
             i += 1;
         };
-        task_market::create_task_combo(tasks);
+        task_market::new_task_combo(tasks);
 
         // 1. 提取资金 (从用户钱包取钱)
         // 真实场景：需要先 coin::withdraw 出来
