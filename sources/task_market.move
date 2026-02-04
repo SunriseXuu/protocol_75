@@ -152,7 +152,7 @@ module protocol_75::task_market {
 
     // 管理员接口 (Admin Public Entries) ---------------------------------
 
-    /// 更新或新增任务配置
+    /// 更新或新增任务配置 (Upsert Task Pool)
     ///
     /// @param admin: 管理员账户签名
     /// @param task_id: 任务类型 ID
@@ -195,7 +195,7 @@ module protocol_75::task_market {
 
     // 外部公开方法 (Public Methods) --------------------------------------
 
-    /// 构建并验证一个新的任务原子 (Task Atom)
+    /// 构建并验证一个新的任务原子 (New Task Atom)
     ///
     /// @param task_id: 任务类型 ID
     /// @param goal: 用户承诺或完成的任务数值
@@ -218,7 +218,7 @@ module protocol_75::task_market {
         TaskAtom { task_id, goal }
     }
 
-    /// 构建任务组合 (Task Combo)
+    /// 构建任务组合 (New Task Combo)
     ///
     /// @param task_atoms: 用于组合任务的任务原子列表
     /// @return TaskCombo: 新的任务组合
@@ -231,7 +231,7 @@ module protocol_75::task_market {
 
     // 内部辅助方法 (Internal Helpers) ------------------------------------
 
-    /// 计算任务组合的综合难度系数
+    /// 计算任务组合的综合难度系数 (Calculate Difficulty)
     ///
     /// 计算公式：Sum(TaskConfig.weight * TaskAtom.goal)
     /// 遍历任务列表，再次验证每个任务原子的有效性，并累加难度。
@@ -273,7 +273,7 @@ module protocol_75::task_market {
     // 视图方法 (View Methods) ------------------------------------------
 
     #[view]
-    /// 获取指定任务 ID 的配置详情
+    /// 获取指定任务 ID 的配置详情 (Get Task Config)
     ///
     /// @param task_id: 指定任务 ID
     /// @return name: 任务名称

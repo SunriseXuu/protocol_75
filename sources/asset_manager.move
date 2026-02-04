@@ -2,7 +2,7 @@
 ///
 /// ## 功能描述
 /// 本模块充当协议的“去中心化银行”，负责底层资金的托管与流转。
-/// 它实现了“非托管”架构，即资金凭证 (YieldPosition) 存储在用户自己的账户资源下，而非中心化合约中。
+/// 它实现了“非托管”架构，即资金凭证 (YieldPosition) 存储在用户自己的账户资源下，而不是合约中。
 ///
 /// 核心功能包括：
 /// 1. **资金托管**：处理用户参与挑战时的资金质押、追加与合并。
@@ -13,7 +13,7 @@
 ///
 /// ## 设计原则
 /// - **安全性**：资产分散存储，避免单点资金池被黑客攻破的风险。
-/// - **被动性**：本模块不包含业务判断逻辑（如谁作弊了），仅被动执行 Friend 模块的指令。
+/// - **被动性**：本模块不关心业务判断逻辑（如谁作弊了），仅被动执行 Friend 模块的指令。
 /// - **状态机**：严格管理资金状态流转 (Active -> Frozen -> Settled/Destroyed)。
 ///
 /// ## 模块依赖
@@ -32,16 +32,18 @@ module protocol_75::asset_manager {
 
     // 错误码 (Error Codes) --------------------------------------------
 
+    /// 错误：无效的锁仓时间 (不能小于当前时间)
+    const E_INVALID_LOCK_TIME: u64 = 1;
     /// 错误：用户未质押或资源不存在
-    const E_NO_POSITION: u64 = 1;
+    const E_NO_POSITION: u64 = 2;
     /// 错误：锁仓未到期 (无法使用逃生舱)
-    const E_LOCK_NOT_EXPIRED: u64 = 2;
+    const E_LOCK_NOT_EXPIRED: u64 = 3;
     /// 错误：资金状态异常 (例如试图操作已冻结的资金)
-    const E_POSITION_FROZEN: u64 = 3;
+    const E_POSITION_FROZEN: u64 = 4;
     /// 错误：资金状态无效 (例如试图结算非活跃资金)
-    const E_INVALID_STATUS: u64 = 4;
+    const E_INVALID_STATUS: u64 = 5;
     /// 错误：无保证金记录
-    const E_NO_BOND: u64 = 5;
+    const E_NO_BOND: u64 = 6;
 
     // 常量 (Constants) -----------------------------------------------
 
@@ -49,10 +51,12 @@ module protocol_75::asset_manager {
     /// 生产环境建议设为 7 天 (604800秒)，测试环境设为 100秒
     const EMERGENCY_LOCK_DURATION: u64 = 100; // TODO: 生产环境设为 604800
 
-    /// 状态：活跃中 (正常质押，可追加，可被冻结)
-    const STATUS_ACTIVE: u8 = 1;
-    /// 状态：冻结中 (被举报，不可提取，不可追加，等待裁决)
-    const STATUS_FROZEN: u8 = 2;
+    /// 仓位状态：活跃中 (正常质押，可追加，可被冻结)
+    const POSITION_STATUS_ACTIVE: u8 = 1;
+    /// 仓位状态：冻结中 (被举报，不可提取，不可追加，等待裁决)
+    const POSITION_STATUS_FROZEN: u8 = 2;
+    /// 仓位状态：已结算 (已提取，不可操作)
+    const POSITION_STATUS_SETTLED: u8 = 3;
 
     /// 协议金库地址 (用于接收罚没款或恶意举报没收金)
     const TREASURY_ADDR: address = @protocol_75;
@@ -66,8 +70,8 @@ module protocol_75::asset_manager {
         principal: Coin<AptosCoin>,
         /// 锁仓截止时间 (用于逃生舱逻辑判断)
         lock_until: u64,
-        /// 绑定的小队哈希 (用于上层业务校验)
-        team_hash: vector<u8>,
+        /// 绑定的挑战哈希 (用于上层业务校验)
+        challenge_hash: vector<u8>,
         /// 当前状态 (Active/Frozen)
         status: u8
     }
@@ -84,57 +88,6 @@ module protocol_75::asset_manager {
     }
 
     // 用户交互接口 (Public Entries) --------------------------------------
-
-    /// 用户质押资金 (Deposit & Stake)
-    ///
-    /// 如果用户已有仓位，支持追加质押；否则创建新仓位。
-    ///
-    /// @param user: 用户交易签名
-    /// @param amount: 质押金额
-    /// @param team_hash: 关联的小队哈希
-    /// @param lock_duration: 预计锁仓时长 (秒)
-    public entry fun deposit_and_stake(
-        user: &signer,
-        amount: u64,
-        team_hash: vector<u8>,
-        lock_duration: u64
-    ) acquires YieldPosition {
-        let user_addr = signer::address_of(user);
-
-        // 从用户钱包提取代币
-        let payment = coin::withdraw<AptosCoin>(user, amount);
-
-        // 检查是否存在现有仓位
-        if (exists<YieldPosition>(user_addr)) {
-            let position = borrow_global_mut<YieldPosition>(user_addr);
-
-            // 如果资金被冻结，禁止追加质押 (防止混淆视听或重置状态)
-            assert!(position.status == STATUS_ACTIVE, E_POSITION_FROZEN);
-
-            // 合并资金
-            coin::merge(&mut position.principal, payment);
-
-            // 更新小队哈希
-            position.team_hash = team_hash;
-
-            // 延长锁仓时间：取 (当前+时长) 与 (原有锁仓时间) 的较大值
-            let new_lock = timestamp::now_seconds() + lock_duration;
-            if (new_lock > position.lock_until) {
-                position.lock_until = new_lock;
-            };
-        }
-        // 否则创建新仓位
-        else {
-            let position = YieldPosition {
-                principal: payment,
-                lock_until: timestamp::now_seconds() + lock_duration,
-                team_hash,
-                status: STATUS_ACTIVE // 默认为活跃状态
-            };
-
-            move_to(user, position);
-        };
-    }
 
     /// 逃生舱强制提款 (Emergency Withdraw)
     ///
@@ -157,7 +110,7 @@ module protocol_75::asset_manager {
         );
 
         // 执行销毁与提款 (无视 status，因为时间锁是最高优先级)
-        let YieldPosition { principal, lock_until: _, team_hash: _, status: _ } =
+        let YieldPosition { principal, lock_until: _, challenge_hash: _, status: _ } =
             move_from<YieldPosition>(user_addr);
 
         // 如果用户还没注册 CoinStore，自动注册以免转账失败
@@ -169,7 +122,92 @@ module protocol_75::asset_manager {
 
     // 友元接口 (Friend Only) -------------------------------------------
 
-    /// 冻结用户资产
+    /// 存入并质押 (Deposit & Stake)
+    ///
+    /// 用户只能通过友元模块间接调用，确保 `lock_until` 是由友元校验过的。
+    /// 调用前须确保如果用户处于“换局”状态，其上一轮挑战必须已完成结算。
+    ///
+    /// 本方法支持两种核心业务场景的自动路由：
+    /// 1. **追加质押 (Top-up)**:
+    ///    - 场景：用户在当前挑战中觉得本金太少，想增加投入。
+    ///    - 逻辑：合并资金，**严禁修改锁仓时间**（防止恶意缩短或非必要的延长）。
+    /// 2. **资金复用 (Rollover)**:
+    ///    - 场景：上一轮挑战结算后，用户未提款，直接用余额开启下一轮。
+    ///    - 逻辑：合并资金（若有新增），**更新锁仓时间**（取最大值以覆盖风险）。
+    ///
+    /// @param user: 用户交易签名
+    /// @param amount: 质押金额
+    /// @param challenge_hash: 关联的挑战哈希
+    /// @param lock_until: 锁仓截止的绝对时间戳
+    public(friend) fun deposit_and_stake(
+        user: &signer,
+        amount: u64,
+        challenge_hash: vector<u8>,
+        lock_until: u64
+    ) acquires YieldPosition {
+        let user_addr = signer::address_of(user);
+
+        // 校验防止传入过去的时间
+        assert!(lock_until > timestamp::now_seconds(), E_INVALID_LOCK_TIME);
+
+        // 从用户钱包提取代币
+        let payment =
+            // 追加质押场景，提取代币
+            if (amount > 0) {
+                coin::withdraw<AptosCoin>(user, amount)
+            }
+            // 资金复用场景，直接返回零代币
+            else {
+                coin::zero<AptosCoin>()
+            };
+
+        // 检查是否存在现有仓位
+        if (exists<YieldPosition>(user_addr)) {
+            let position = borrow_global_mut<YieldPosition>(user_addr);
+
+            // 如果资金被冻结，禁止追加质押 (防止混淆视听或重置状态)
+            assert!(position.status == POSITION_STATUS_ACTIVE, E_POSITION_FROZEN);
+
+            // 合并资金
+            coin::merge(&mut position.principal, payment);
+
+            // 场景1：同挑战追加资金 (Top-up)
+            // 如果用户还在同一个挑战里追加资金，那么锁仓时间必须与之前保持一致。
+            // 1. 禁止缩短：防止提前取款（提前逃跑）。
+            // 2. 禁止延长：防止恶意延期，导致无法结算。
+            if (position.challenge_hash == challenge_hash) {
+                assert!(lock_until == position.lock_until, E_INVALID_LOCK_TIME);
+            }
+            // 场景2：切换到新挑战 (Rollover)，则允许更新时间。
+            // 1. 如果上一个挑战已被结算，则可以直接更新时间，
+            // 2. 如果上一个挑战未被结算，友元模块在调用此函数前，会先结算上一个挑战
+            else {
+                // 更新挑战哈希
+                position.challenge_hash = challenge_hash;
+
+                // 锁仓时间只能延长，禁止缩短 (Max Logic)。
+                // 如果用户上一轮挑战的锁仓期还未结束（例如下个月才到期），
+                // 不允许通过参与一个更短周期的新挑战（例如明天结束）来变相“提前解锁”原有资金。
+                // 因此，新的锁仓时间必须取 max(原有锁仓, 新挑战锁仓)。
+                if (lock_until > position.lock_until) {
+                    position.lock_until = lock_until;
+                };
+            };
+        }
+        // 否则创建新仓位
+        else {
+            let position = YieldPosition {
+                principal: payment,
+                lock_until,
+                challenge_hash,
+                status: POSITION_STATUS_ACTIVE // 默认为活跃状态
+            };
+
+            move_to(user, position);
+        };
+    }
+
+    /// 冻结用户资产 (Freeze Position)
     ///
     /// 场景：当用户被举报作弊时调用。冻结后用户无法追加质押或正常结算。
     ///
@@ -180,12 +218,12 @@ module protocol_75::asset_manager {
         let position = borrow_global_mut<YieldPosition>(user_addr);
 
         // 只有活跃状态才能被冻结
-        if (position.status == STATUS_ACTIVE) {
-            position.status = STATUS_FROZEN;
+        if (position.status == POSITION_STATUS_ACTIVE) {
+            position.status = POSITION_STATUS_FROZEN;
         };
     }
 
-    /// 解冻用户资产
+    /// 解冻用户资产 (Unfreeze Position)
     ///
     /// 场景：举报被判定无效（无罪释放），恢复用户资金活性。
     ///
@@ -196,8 +234,8 @@ module protocol_75::asset_manager {
         let position = borrow_global_mut<YieldPosition>(user_addr);
 
         // 只有冻结状态才能被解冻
-        if (position.status == STATUS_FROZEN) {
-            position.status = STATUS_ACTIVE;
+        if (position.status == POSITION_STATUS_FROZEN) {
+            position.status = POSITION_STATUS_ACTIVE;
         };
     }
 
@@ -213,14 +251,14 @@ module protocol_75::asset_manager {
         assert!(exists<YieldPosition>(user_addr), E_NO_POSITION);
 
         // 彻底移出资源 (Move From)
-        let YieldPosition { principal, lock_until: _, team_hash: _, status: _ } =
+        let YieldPosition { principal, lock_until: _, challenge_hash: _, status: _ } =
             move_from<YieldPosition>(user_addr);
 
         // 返回代币对象
         principal
     }
 
-    /// 收取举报保证金
+    /// 收取举报保证金 (Collect Report Bond)
     ///
     /// 场景：用户发起举报时，需缴纳投名状。
     ///
@@ -286,7 +324,7 @@ module protocol_75::asset_manager {
     // 视图方法 (View Methods) ------------------------------------------
 
     #[view]
-    /// 获取用户仓位详情
+    /// 获取用户仓位详情 (Get Position Info)
     ///
     /// @param user: 用户地址
     /// @return (principal, lock_until, status)
