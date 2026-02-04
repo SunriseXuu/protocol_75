@@ -27,7 +27,7 @@ module protocol_75::asset_manager {
 
     // 友元声明 (Friend Declarations) -----------------------------------
 
-    /// 只允许 challenge_manager 调用冻结、结算、罚没等敏感接口
+    /// 允许 challenge_manager 模块调用友元接口
     friend protocol_75::challenge_manager;
 
     // 错误码 (Error Codes) --------------------------------------------
@@ -87,7 +87,7 @@ module protocol_75::asset_manager {
         reporter: address
     }
 
-    // 用户交互接口 (Public Entries) --------------------------------------
+    // 用户接口 (Public Entries) ----------------------------------------
 
     /// 逃生舱强制提款 (Emergency Withdraw)
     ///
@@ -337,7 +337,7 @@ module protocol_75::asset_manager {
         (coin::value(&pos.principal), pos.lock_until, pos.status)
     }
 
-    // 单元测试 -------------------------------------------------------
+    // 单元测试 (Unit Tests) --------------------------------------------
 
     #[test_only]
     use aptos_framework::account;

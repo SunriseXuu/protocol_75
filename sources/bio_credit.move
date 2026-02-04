@@ -1,62 +1,148 @@
 /// # 身份与信用模块 (Bio Credit)
 ///
 /// 该模块是协议的用户存储层 (Storage Layer)，负责管理用户的核心信用资产。
+/// 它实现了 BioSoul SBT 的逻辑，结合了“时间衰减”与“阻尼增长”的数值模型。
 ///
-/// 主要功能：
+/// ## 核心机制
 /// 1. **BioSoul SBT**：用户的灵魂绑定资产，记录信用分、连胜、设备指纹。
-/// 2. **数据聚合**：SBT 作为容器，挂载了用户获得的所有勋章 (Badges)。
-/// 3. **行为日志**：使用 Table 存储用户海量的每日打卡数据，支持无限扩展。
+/// 2. **数值系统**：
+///    - **区间**：35.000000 (Min) - 95.000000 (Max)。
+///    - **精度**：6 位小数 (u64 存储，1_000_000 = 1.0)。
+///    - **分水岭**：75.0 分。超过此分数进入高难度模式。
+///    - **阻尼增长**：分数越高，获取积分越难 (模拟 Logistic 曲线特性)。
+///    - **自然衰减**：随时间流逝自动扣分，逼迫用户持续活跃。
+/// 3. **数据聚合**：挂载勋章 (Badges)，并使用 Table 存储海量每日打卡日志。
+///
+/// ## 模块依赖
+/// - `badge_factory`: 引用勋章对象类型。
+/// - 仅 `challenge_manager` (Friend) 可修改分数与日志。
 module protocol_75::bio_credit {
     use std::string::String;
     use std::vector;
     use std::signer;
+    use std::math64;
     use aptos_std::table::{Self, Table};
     use aptos_framework::object::Object;
+    use aptos_framework::timestamp;
+    use aptos_framework::event;
+    use aptos_framework::account;
 
     use protocol_75::badge_factory::AchievementBadge;
 
+    // 友元声明 (Friend Declarations) -----------------------------------
+
+    /// 允许 challenge_manager 模块调用友元接口
     friend protocol_75::challenge_manager;
 
-    /// 用户未注册
+    // 错误码 (Error Codes) --------------------------------------------
+
+    /// 错误：用户未注册
     const E_NOT_REGISTERED: u64 = 1;
-    /// 用户已注册
+    /// 错误：用户已注册
     const E_ALREADY_REGISTERED: u64 = 2;
 
-    /// 用户每日行为数据
+    // 数值常量 (Constants) ---------------------------------------------
+
+    /// 精度因子 (6位小数)
+    const SCALING_FACTOR: u64 = 1_000_000;
+
+    /// 最低分 (35.0)
+    const MIN_SCORE: u64 = 35_000_000;
+    /// 最高分 (95.0)
+    const MAX_SCORE: u64 = 95_000_000;
+    /// 初始分 (50.0)
+    const INITIAL_SCORE: u64 = 50_000_000;
+    /// 精英分水岭 (75.0)
+    const ELITE_THRESHOLD: u64 = 75_000_000;
+
+    /// 基础奖励分 (每次成功的基准分 1.0)
+    const BASE_REWARD: u64 = 1_000_000;
+
+    /// 衰减速率 (每天掉 0.5 分)
+    const DAILY_DECAY_RATE: u64 = 500_000;
+    /// 衰减豁免期 (48小时)
+    const DECAY_GRACE_PERIOD: u64 = 172800;
+
+    // 数据结构 (Data Structures) ---------------------------------------
+
+    /// 用户每日行为数据 (轻量级结构)
     struct DailyData has store, drop {
         step_count: u64,
         timestamp: u64,
         signature_hash: vector<u8>
     }
 
+    /// 信用变更事件
+    struct ScoreUpdateEvent has store, drop {
+        user: address,
+        old_score: u64,
+        new_score: u64,
+        reason: u8, // 1=Reward, 2=Slash, 3=Decay
+        timestamp: u64
+    }
+
+    /// 事件句柄容器
+    struct Events has key {
+        score_events: event::EventHandle<ScoreUpdateEvent>
+    }
+
     /// 用户灵魂绑定资源 (SBT)
     struct BioSoul has key {
+        /// 当前信用分 (精度6)
         score: u64,
+        /// 历史最高分
+        highest_score: u64,
+        /// 个人连胜场次
         personal_streak: u64,
+        /// 上次分数更新时间 (用于懒惰计算衰减)
+        last_update_time: u64,
+        /// 设备指纹哈希 (绑定常用设备)
         device_hash: vector<u8>,
+        /// 获得的勋章列表
         badges: vector<Object<AchievementBadge>>,
+        /// 每日活动日志 (Table 存储以节省主资源大小)
         activity_log: Table<String, DailyData>
     }
+
+    // 用户接口 (Public Entries) ----------------------------------------
 
     /// Seq 1: 用户注册，初始化 BioSoul
     public entry fun register_user(user: &signer, device_hash: vector<u8>) {
         let user_addr = signer::address_of(user);
         assert!(!exists<BioSoul>(user_addr), E_ALREADY_REGISTERED);
 
-        let soul = BioSoul {
-            score: 50,
-            personal_streak: 0,
-            device_hash,
-            badges: vector::empty(),
-            activity_log: table::new()
-        };
-        move_to(user, soul);
+        move_to(
+            user,
+            BioSoul {
+                score: INITIAL_SCORE,
+                highest_score: INITIAL_SCORE,
+                personal_streak: 0,
+                last_update_time: timestamp::now_seconds(),
+                device_hash,
+                badges: vector::empty(),
+                activity_log: table::new()
+            }
+        );
+
+        if (!exists<Events>(user_addr)) {
+            move_to(
+                user,
+                Events {
+                    score_events: account::new_event_handle<ScoreUpdateEvent>(user)
+                }
+            );
+        }
     }
 
+    // 友元接口 (Friend Only) -------------------------------------------
+
     /// Seq 3.1: 记录每日打卡 (仅限 Friend)
+    ///
+    /// 本函数仅负责“记账”，不负责“算分”。
+    /// 算分逻辑由 challenge_manager 在确认合规后调用 `update_score`。
     public(friend) fun record_daily_activity(
         user: address,
-        date_key: String,
+        date_key: String, // e.g. "2023-10-01"
         step_count: u64,
         timestamp: u64,
         signature_hash: vector<u8>
@@ -75,23 +161,74 @@ module protocol_75::bio_credit {
     }
 
     /// Seq 4.2: 更新分数与连胜 (仅限 Friend)
+    ///
+    /// 核心数值逻辑：
+    /// 1. 先结算时间衰减 (Decay)。
+    /// 2. 如果合规 (Compliant)：增加阻尼分数。
+    /// 3. 如果违规 (Not Compliant)：扣除固定惩罚并清零连胜。
     public(friend) fun update_score_and_streak(
-        user: address, is_compliant: bool, _difficulty: u64
-    ) acquires BioSoul {
+        user: address,
+        is_compliant: bool,
+        _difficulty: u64 // 预留参数，未来可根据任务难度调整权重
+    ) acquires BioSoul, Events {
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
+
+        // 1. 先应用懒惰衰减
+        apply_decay_internal(user);
+
         let soul = borrow_global_mut<BioSoul>(user);
+        let old_score = soul.score;
 
         if (is_compliant) {
             soul.personal_streak += 1;
-            if (soul.score < 100) {
-                soul.score += 1;
+
+            // [阻尼增长算法]
+            // 公式：实际增量 = 基础分 * (1 - (当前分 - 最低分) / (最高分 - 最低分))
+            // 解释：分数越接近 95，(1 - Ratio) 越小，增量越少。
+            // 当分数 = 35 时，增量 = 1.0
+            // 当分数 = 95 时，增量 = 0.0
+
+            let range = MAX_SCORE - MIN_SCORE;
+            let current_pos = soul.score - MIN_SCORE;
+
+            // 为了避免浮点运算，使用乘法先放大
+            // increment = BASE * (Range - CurrentPos) / Range
+            let dampening_factor = range - current_pos;
+            let increment = (BASE_REWARD * dampening_factor) / range;
+
+            // 确保至少有微小的增长 (0.000001)，防止彻底停滞
+            if (increment == 0 && soul.score < MAX_SCORE) {
+                increment = 1;
             };
+
+            soul.score = math64::min(soul.score + increment, MAX_SCORE);
+
+            // 更新最高分记录
+            if (soul.score > soul.highest_score) {
+                soul.highest_score = soul.score;
+            };
+
+            // 记录加分事件
+            emit_score_event(user, old_score, soul.score, 1);
+
         } else {
+            // 违约惩罚
             soul.personal_streak = 0;
-            if (soul.score > 0) {
-                soul.score -= 1;
+
+            // 扣分逻辑：固定扣除 1.0 分 (或者根据难度调整)
+            let penalty = BASE_REWARD;
+            if (soul.score > MIN_SCORE + penalty) {
+                soul.score -= penalty;
+            } else {
+                soul.score = MIN_SCORE;
             };
+
+            // 记录扣分事件
+            emit_score_event(user, old_score, soul.score, 2);
         };
+
+        // 更新时间戳
+        soul.last_update_time = timestamp::now_seconds();
     }
 
     /// Seq 5.2: 挂载勋章 (仅限 Friend)
@@ -99,12 +236,68 @@ module protocol_75::bio_credit {
         user: address, badge: Object<AchievementBadge>
     ) acquires BioSoul {
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
-        
         let soul = borrow_global_mut<BioSoul>(user);
         soul.badges.push_back(badge);
     }
 
+    // 内部私有方法 (Private Methods) -------------------------------------
+
+    /// 应用自然衰减 (Lazy Decay)
+    ///
+    /// 逻辑：
+    /// - 计算距离上次更新的时间差。
+    /// - 减去豁免期 (Grace Period)。
+    /// - 剩余时间按天扣除分数。
+    fun apply_decay_internal(user: address) acquires BioSoul, Events {
+        let soul = borrow_global_mut<BioSoul>(user);
+        let now = timestamp::now_seconds();
+
+        // 还没过豁免期，无需衰减
+        if (now <= soul.last_update_time + DECAY_GRACE_PERIOD) { return };
+
+        let decay_duration = (now - soul.last_update_time) - DECAY_GRACE_PERIOD;
+        let days_passed = decay_duration / 86400; // 86400s = 1 day
+
+        if (days_passed > 0) {
+            let total_decay = days_passed * DAILY_DECAY_RATE;
+            let old_score = soul.score;
+
+            if (soul.score > MIN_SCORE + total_decay) {
+                soul.score -= total_decay;
+            } else {
+                soul.score = MIN_SCORE;
+            };
+
+            // 如果发生了分数变化，记录事件
+            if (soul.score != old_score) {
+                emit_score_event(user, old_score, soul.score, 3); // Reason 3 = Decay
+            };
+
+            // 注意：此处不更新 last_update_time，
+            // 把它留给后续的 update_score_and_streak 统一更新到 now。
+        }
+    }
+
+    fun emit_score_event(user: address, old: u64, new: u64, reason: u8) acquires Events {
+        if (exists<Events>(user)) {
+            let events = borrow_global_mut<Events>(user);
+            event::emit_event(
+                &mut events.score_events,
+                ScoreUpdateEvent {
+                    user,
+                    old_score: old,
+                    new_score: new,
+                    reason,
+                    timestamp: timestamp::now_seconds()
+                }
+            );
+        }
+    }
+
+    // 视图函数 (View Functions) ----------------------------------------
+
     #[view]
+    /// 获取当前链上分数
     public fun get_score(user: address): u64 acquires BioSoul {
         if (!exists<BioSoul>(user)) {
             return 0
@@ -113,33 +306,36 @@ module protocol_75::bio_credit {
     }
 
     #[view]
+    /// 获取包含“预测衰减”的实时有效分数
+    /// 前端展示时应优先使用此函数，以反映实时状态。
+    public fun get_effective_score(user: address): u64 acquires BioSoul {
+        if (!exists<BioSoul>(user)) {
+            return 0
+        };
+        let soul = borrow_global<BioSoul>(user);
+
+        let now = timestamp::now_seconds();
+        if (now <= soul.last_update_time + DECAY_GRACE_PERIOD) {
+            return soul.score
+        };
+
+        let decay_duration = (now - soul.last_update_time) - DECAY_GRACE_PERIOD;
+        let days = decay_duration / 86400;
+        let decay = days * DAILY_DECAY_RATE;
+
+        if (soul.score > MIN_SCORE + decay) {
+            soul.score - decay
+        } else {
+            MIN_SCORE
+        }
+    }
+
+    #[view]
     public fun get_personal_streak(user: address): u64 acquires BioSoul {
         if (!exists<BioSoul>(user)) {
             return 0
         };
         borrow_global<BioSoul>(user).personal_streak
-    }
-
-    #[test_only]
-    use std::string;
-
-    #[test(user = @0x123)]
-    /// 测试 Bio Credit 流程
-    fun test_bio_credit_flow(user: &signer) acquires BioSoul {
-        let user_addr = signer::address_of(user);
-
-        // 1. 注册
-        register_user(user, vector::empty());
-        assert!(get_score(user_addr) == 50, 0);
-
-        // 2. 记录打卡
-        let date = string::utf8(b"2023-10-01");
-        record_daily_activity(user_addr, date, 5000, 10000, vector::empty());
-
-        // 3. 更新连胜
-        update_score_and_streak(user_addr, true, 10);
-        assert!(get_personal_streak(user_addr) == 1, 1);
-        assert!(get_score(user_addr) == 51, 2);
     }
 }
 

@@ -22,6 +22,11 @@ module protocol_75::task_market {
     use std::signer;
     use aptos_std::table::{Self, Table};
 
+    // 友元声明 (Friend Declarations) -----------------------------------
+
+    /// 允许 challenge_manager 模块调用友元接口
+    friend protocol_75::challenge_manager;
+
     // 错误码 (Error Codes) --------------------------------------------
 
     /// 错误：权限不足 (非管理员调用)
@@ -53,7 +58,7 @@ module protocol_75::task_market {
 
     /// 任务原子 (Task Atom)
     /// 代表一个具体的、可量化的任务单元。
-    struct TaskAtom has copy, drop, store {
+    struct TaskAtom has store, drop {
         /// 任务类型 ID
         task_id: u8,
         /// 任务目标数值 (单位取决于具体任务类型，如 kcal, min)
@@ -62,7 +67,7 @@ module protocol_75::task_market {
 
     /// 任务组合 (Task Combo)
     /// 包含一组任务原子及其计算出的综合难度。
-    struct TaskCombo has copy, drop, store {
+    struct TaskCombo has store, drop {
         /// 任务原子列表
         task_atoms: vector<TaskAtom>,
         /// 综合难度系数
@@ -71,7 +76,7 @@ module protocol_75::task_market {
 
     /// 任务配置项 (Task Config Item)
     /// 存储每种任务类型的规则参数。
-    struct TaskConfigItem has copy, drop, store {
+    struct TaskConfigItem has store, drop {
         /// 任务名称 (如 "Calories Burned")
         name: vector<u8>,
         /// 任务难度权重 (每单位目标值对应的难度分数)
@@ -193,14 +198,14 @@ module protocol_75::task_market {
         }
     }
 
-    // 外部公开方法 (Public Methods) --------------------------------------
+    // 友元接口 (Friend Only) -------------------------------------------
 
     /// 构建并验证一个新的任务原子 (New Task Atom)
     ///
     /// @param task_id: 任务类型 ID
     /// @param goal: 用户承诺或完成的任务数值
     /// @return TaskAtom: 验证通过的任务原子对象
-    public fun new_task_atom(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
+    public(friend) fun new_task_atom(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
         let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
         let pool = &task_pool.pool;
         let task_config_item = pool.borrow(task_id);
@@ -222,14 +227,14 @@ module protocol_75::task_market {
     ///
     /// @param task_atoms: 用于组合任务的任务原子列表
     /// @return TaskCombo: 新的任务组合
-    public fun new_task_combo(task_atoms: vector<TaskAtom>): TaskCombo acquires TaskPool {
+    public(friend) fun new_task_combo(task_atoms: vector<TaskAtom>): TaskCombo acquires TaskPool {
         // 根据传入的任务原子列表，计算总难度并打包
         let difficulty = calculate_difficulty(&task_atoms);
 
         TaskCombo { task_atoms, difficulty }
     }
 
-    // 内部辅助方法 (Internal Helpers) ------------------------------------
+    // 内部私有方法 (Private Methods) -------------------------------------
 
     /// 计算任务组合的综合难度系数 (Calculate Difficulty)
     ///
@@ -294,7 +299,7 @@ module protocol_75::task_market {
         (name, weight, goal_min, goal_max, is_active)
     }
 
-    // 单元测试 -------------------------------------------------------
+    // 单元测试 (Unit Tests) --------------------------------------------
 
     #[test_only]
     use std::vector;
