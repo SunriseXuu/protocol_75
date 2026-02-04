@@ -22,7 +22,7 @@ module protocol_75::task_market {
     use std::signer;
     use aptos_std::table::{Self, Table};
 
-    // 错误码 ----------------------------------------------------------
+    // 错误码 (Error Codes) --------------------------------------------
 
     /// 错误：权限不足 (非管理员调用)
     const E_NOT_ADMIN: u64 = 1;
@@ -30,12 +30,12 @@ module protocol_75::task_market {
     const E_INVALID_TASK_ID: u64 = 2;
     /// 错误：无效的任务目标值 (超出允许的 Min/Max 范围)
     const E_INVALID_TASK_GOAL: u64 = 3;
+    /// 错误：无效的任务边界值 (例如 Min > Max)
+    const E_INVALID_TASK_EDGES: u64 = 4;
     /// 错误：该任务类型已被禁用
-    const E_TASK_DISABLED: u64 = 4;
-    /// 错误：配置参数无效 (例如 Min > Max)
-    const E_INVALID_LIMITS: u64 = 5;
+    const E_TASK_DISABLED: u64 = 5;
 
-    // 常量 -----------------------------------------------------------
+    // 常量 (Constants) -----------------------------------------------
 
     /// 任务 ID: 卡路里消耗 (Calories Burned)
     const TASK_CALORIES_BURNED: u8 = 1;
@@ -49,7 +49,7 @@ module protocol_75::task_market {
     /// 管理员/部署者地址
     const ADMIN_ADDR: address = @protocol_75;
 
-    // 数据结构 -------------------------------------------------------
+    // 数据结构 (Data Structures) ---------------------------------------
 
     /// 任务原子 (Task Atom)
     /// 代表一个具体的、可量化的任务单元。
@@ -92,7 +92,7 @@ module protocol_75::task_market {
     }
 
     /// 模块初始化
-    /// 设置默认支持的任务类型与参数。
+    /// 设置默认支持的任务类型与参数
     fun init_module(admin: &signer) {
         // 创建任务池的默认配置表
         let pool = table::new<u8, TaskConfigItem>();
@@ -150,7 +150,9 @@ module protocol_75::task_market {
         move_to(admin, TaskPool { pool });
     }
 
-    /// 管理员入口：更新或新增任务配置
+    // 管理员接口 (Admin Public Entries) ---------------------------------
+
+    /// 更新或新增任务配置
     ///
     /// @param admin: 管理员账户签名
     /// @param task_id: 任务类型 ID
@@ -167,11 +169,11 @@ module protocol_75::task_market {
         goal_min: u64,
         goal_max: u64,
         is_active: bool
-    ) {
+    ) acquires TaskPool {
         // 鉴权检查
         assert!(signer::address_of(admin) == ADMIN_ADDR, E_NOT_ADMIN);
         // 参数合法性检查
-        assert!(goal_min <= goal_max, E_INVALID_LIMITS);
+        assert!(goal_min <= goal_max, E_INVALID_TASK_EDGES);
 
         // 借用可变的 TaskPool 资源
         let pool = &mut borrow_global_mut<TaskPool>(ADMIN_ADDR).pool;
@@ -185,12 +187,14 @@ module protocol_75::task_market {
         }
     }
 
+    // 外部公开方法 (Public Methods) --------------------------------------
+
     /// 构建并验证一个新的任务原子 (Task Atom)
     ///
     /// @param task_id: 任务类型 ID
     /// @param goal: 用户承诺或完成的任务数值
     /// @return TaskAtom: 验证通过的任务原子对象
-    public fun new_task_atom(task_id: u8, goal: u64): TaskAtom {
+    public fun new_task_atom(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
         // 借用不可变的 TaskPool 资源
         let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
         let task_config_item = pool.borrow(task_id);
@@ -212,12 +216,14 @@ module protocol_75::task_market {
     ///
     /// @param task_atoms: 用于组合任务的任务原子列表
     /// @return TaskCombo: 新的任务组合
-    public fun new_task_combo(task_atoms: vector<TaskAtom>): TaskCombo {
+    public fun new_task_combo(task_atoms: vector<TaskAtom>): TaskCombo acquires TaskPool {
         // 根据传入的任务原子列表，计算总难度并打包
         let difficulty = calculate_difficulty(&task_atoms);
 
         TaskCombo { task_atoms, difficulty }
     }
+
+    // 内部辅助方法 (Internal Helpers) ------------------------------------
 
     /// 计算任务组合的综合难度系数
     ///
@@ -226,7 +232,7 @@ module protocol_75::task_market {
     ///
     /// @param task_atoms: 任务原子列表引用
     /// @return u64: 总难度系数
-    fun calculate_difficulty(task_atoms: &vector<TaskAtom>): u64 {
+    fun calculate_difficulty(task_atoms: &vector<TaskAtom>): u64 acquires TaskPool {
         // 借用不可变的 TaskPool 资源
         let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
 
@@ -258,16 +264,18 @@ module protocol_75::task_market {
         total_difficulty
     }
 
+    // 视图方法 (View Methods) ------------------------------------------
+
     #[view]
-    /// 视图函数：获取指定任务 ID 的配置详情
-    /// 
+    /// 获取指定任务 ID 的配置详情
+    ///
     /// @param task_id: 指定任务 ID
     /// @return name: 任务名称
     /// @return weight: 难度权重
     /// @return goal_min: 目标下限
     /// @return goal_max: 目标上限
     /// @return is_active: 是否启用
-    public fun get_task_config(task_id: u8): (vector<u8>, u64, u64, u64, bool) {
+    public fun get_task_config(task_id: u8): (vector<u8>, u64, u64, u64, bool) acquires TaskPool {
         let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
         if (!pool.contains(task_id)) {
             return (b"", 0, 0, 0, false)
@@ -276,6 +284,8 @@ module protocol_75::task_market {
         let item = pool.borrow(task_id);
         (item.name, item.weight, item.goal_min, item.goal_max, item.is_active)
     }
+
+    // 单元测试 -------------------------------------------------------
 
     #[test_only]
     use std::vector;
@@ -296,7 +306,7 @@ module protocol_75::task_market {
     /// - 任务原子 1：消耗卡路里 (Weight=1)，Goal=300 -> Difficulty=300
     /// - 任务原子 2：锻炼时长 (Weight=10)，Goal=30 -> Difficulty=300
     /// - **预期结果**：总难度 = 600
-    fun test_calculate_difficulty(admin: &signer) {
+    fun test_calculate_difficulty(admin: &signer) acquires TaskPool {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
@@ -318,7 +328,7 @@ module protocol_75::task_market {
     /// **测试场景**：
     /// - 提交一个 Goal=0 的任务原子 (低于 Min=200)
     /// - **预期结果**：触发 E_INVALID_TASK_GOAL (Code=3) 并中止
-    fun test_fail_goal(admin: &signer) {
+    fun test_fail_goal(admin: &signer) acquires TaskPool {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
@@ -337,7 +347,7 @@ module protocol_75::task_market {
     /// 2. Admin 修改睡眠任务：权重设为 2，范围调整为 400-800
     /// 3. 验证修改后的难度 (480min * 2 = 960分)
     /// 4. Admin 新增任务类型 (ID=5)，并验证新任务计算
-    fun test_upsert_task(admin: &signer) {
+    fun test_upsert_task(admin: &signer) acquires TaskPool {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
@@ -363,6 +373,92 @@ module protocol_75::task_market {
         upsert_task_pool(admin, 5, b"Walk Steps", 25, 10, 30, true);
         let task_atoms = vector::singleton<TaskAtom>(new_task_atom(5, 20));
         assert!(calculate_difficulty(&task_atoms) == 500, 2);
+    }
+
+    #[test(admin = @protocol_75, user = @0x123)]
+    #[expected_failure(abort_code = E_NOT_ADMIN)]
+    /// 测试权限安全性：非管理员尝试更新配置
+    fun test_upsert_task_not_admin(admin: &signer, user: &signer) acquires TaskPool {
+        account::create_account_for_test(signer::address_of(admin));
+        init_module(admin);
+
+        // 普通用户尝试修改配置 -> 预期失败
+        upsert_task_pool(user, 1, b"Hacked", 1, 0, 100, true);
+    }
+
+    #[test(admin = @protocol_75)]
+    #[expected_failure(abort_code = E_INVALID_TASK_EDGES)]
+    /// 测试配置边界安全性：Min > Max
+    fun test_upsert_task_invalid_edges(admin: &signer) acquires TaskPool {
+        account::create_account_for_test(signer::address_of(admin));
+        init_module(admin);
+
+        // 设置 Min(100) > Max(50) -> 预期失败
+        upsert_task_pool(admin, 1, b"Bad Config", 1, 100, 50, true);
+    }
+
+    #[test(admin = @protocol_75)]
+    #[expected_failure(abort_code = E_TASK_DISABLED)]
+    /// 测试任务状态：尝试使用已禁用的任务
+    fun test_task_disabled(admin: &signer) acquires TaskPool {
+        account::create_account_for_test(signer::address_of(admin));
+        init_module(admin);
+
+        // 1. 禁用卡路里任务 (ID=1)
+        upsert_task_pool(
+            admin,
+            TASK_CALORIES_BURNED,
+            b"Calories Burned",
+            1,
+            200,
+            10000,
+            false // is_active = false
+        );
+
+        // 2. 尝试创建该类型的任务原子 -> 预期失败
+        new_task_atom(TASK_CALORIES_BURNED, 500);
+    }
+
+    #[test(admin = @protocol_75)]
+    #[expected_failure(abort_code = E_INVALID_TASK_ID)]
+    /// 测试无效 ID：尝试使用不存在的任务 ID
+    fun test_invalid_task_id(admin: &signer) acquires TaskPool {
+        account::create_account_for_test(signer::address_of(admin));
+        init_module(admin);
+
+        // ID 99 不存在 -> 预期失败
+        new_task_atom(99, 100);
+    }
+
+    #[test(admin = @protocol_75)]
+    #[expected_failure(abort_code = E_INVALID_TASK_GOAL)]
+    /// 测试双重校验逻辑 (Double Check)
+    /// 测试场景：Atom 创建时合法，但随后配置变更（门槛提高），
+    /// 在组合计算时应当拦截该“过时”的 Atom。
+    fun test_double_check_logic(admin: &signer) acquires TaskPool {
+        account::create_account_for_test(signer::address_of(admin));
+        init_module(admin);
+
+        // 1. 创建合法的 Atom: Goal=300 (当前 Min=200)
+        let atom = new_task_atom(TASK_CALORIES_BURNED, 300);
+        let task_atoms = vector::singleton(atom);
+
+        // 2. 此时计算应该是成功的
+        assert!(calculate_difficulty(&task_atoms) == 300, 0);
+
+        // 3. 管理员更新配置，将 Min 提高到 400
+        upsert_task_pool(
+            admin,
+            TASK_CALORIES_BURNED,
+            b"Harder Calories",
+            1,
+            400, // 新 Min > 这里的 Atom Goal(300)
+            10000,
+            true
+        );
+
+        // 4. 再次计算 -> Double Check 应发现 Goal(300) < Min(400) -> 预期失败
+        calculate_difficulty(&task_atoms);
     }
 }
 
