@@ -101,15 +101,14 @@ module protocol_75::asset_manager {
     ) acquires YieldPosition {
         let user_addr = signer::address_of(user);
 
-        // 1. 从用户钱包提取代币
+        // 从用户钱包提取代币
         let payment = coin::withdraw<AptosCoin>(user, amount);
 
-        // 2. 检查是否存在现有仓位
+        // 检查是否存在现有仓位
         if (exists<YieldPosition>(user_addr)) {
-            // 借用用户仓位的可变引用
             let position = borrow_global_mut<YieldPosition>(user_addr);
 
-            // [核心风控] 如果资金被冻结，禁止追加质押 (防止混淆视听或重置状态)
+            // 如果资金被冻结，禁止追加质押 (防止混淆视听或重置状态)
             assert!(position.status == STATUS_ACTIVE, E_POSITION_FROZEN);
 
             // 合并资金
@@ -124,7 +123,7 @@ module protocol_75::asset_manager {
                 position.lock_until = new_lock;
             };
         }
-        // 3. 否则创建新仓位
+        // 否则创建新仓位
         else {
             let position = YieldPosition {
                 principal: payment,
@@ -151,7 +150,7 @@ module protocol_75::asset_manager {
 
         let position = borrow_global<YieldPosition>(user_addr);
 
-        // [核心校验] 检查时间锁是否过期
+        // 检查时间锁是否过期
         assert!(
             timestamp::now_seconds() > position.lock_until + EMERGENCY_LOCK_DURATION,
             E_LOCK_NOT_EXPIRED
@@ -176,14 +175,13 @@ module protocol_75::asset_manager {
     ///
     /// @param user_addr: 目标用户地址
     public(friend) fun freeze_position(user_addr: address) acquires YieldPosition {
-        // 允许对不存在仓位的用户调用(虽然无意义)，防止上层逻辑崩溃，但如果有仓位则必须存在
-        if (exists<YieldPosition>(user_addr)) {
-            let position = borrow_global_mut<YieldPosition>(user_addr);
+        assert!(exists<YieldPosition>(user_addr), E_NO_POSITION);
 
-            // 只有 Active 状态才能被冻结
-            if (position.status == STATUS_ACTIVE) {
-                position.status = STATUS_FROZEN;
-            };
+        let position = borrow_global_mut<YieldPosition>(user_addr);
+
+        // 只有活跃状态才能被冻结
+        if (position.status == STATUS_ACTIVE) {
+            position.status = STATUS_FROZEN;
         };
     }
 
@@ -193,11 +191,13 @@ module protocol_75::asset_manager {
     ///
     /// @param user_addr: 目标用户地址
     public(friend) fun unfreeze_position(user_addr: address) acquires YieldPosition {
-        if (exists<YieldPosition>(user_addr)) {
-            let position = borrow_global_mut<YieldPosition>(user_addr);
-            if (position.status == STATUS_FROZEN) {
-                position.status = STATUS_ACTIVE;
-            };
+        assert!(exists<YieldPosition>(user_addr), E_NO_POSITION);
+
+        let position = borrow_global_mut<YieldPosition>(user_addr);
+
+        // 只有冻结状态才能被解冻
+        if (position.status == STATUS_FROZEN) {
+            position.status = STATUS_ACTIVE;
         };
     }
 
@@ -212,11 +212,11 @@ module protocol_75::asset_manager {
     public(friend) fun extract_funds(user_addr: address): Coin<AptosCoin> acquires YieldPosition {
         assert!(exists<YieldPosition>(user_addr), E_NO_POSITION);
 
-        // 1. 彻底移出资源 (Move From)
+        // 彻底移出资源 (Move From)
         let YieldPosition { principal, lock_until: _, team_hash: _, status: _ } =
             move_from<YieldPosition>(user_addr);
 
-        // 2. 返回代币对象
+        // 返回代币对象
         principal
     }
 
@@ -235,9 +235,12 @@ module protocol_75::asset_manager {
         // 如果已有保证金记录，则追加 (支持多重举报场景)
         if (exists<ReportBond>(reporter_addr)) {
             let bond = borrow_global_mut<ReportBond>(reporter_addr);
+
             coin::merge(&mut bond.coins, coins);
             bond.amount += amount;
-        } else {
+        }
+        // 如果没有，则创建新记录
+        else {
             move_to(
                 reporter,
                 ReportBond { coins, amount, reporter: reporter_addr }
@@ -252,21 +255,23 @@ module protocol_75::asset_manager {
     /// @param reporter_addr: 举报者地址
     /// @param amount: 需要释放/罚没的金额
     /// @param is_return: true=退还给举报者 (举报成功), false=罚没到国库 (恶意举报)
-    public(friend) fun release_report_bond(
+    public(friend) fun release_or_seize_report_bond(
         reporter_addr: address, amount: u64, is_return: bool
     ) acquires ReportBond {
         assert!(exists<ReportBond>(reporter_addr), E_NO_BOND);
+
         let bond = borrow_global_mut<ReportBond>(reporter_addr);
 
         // 从总保证金中提取指定金额
         let release_coins = coin::extract(&mut bond.coins, amount);
         bond.amount -= amount;
 
+        // 退还
         if (is_return) {
-            // 退还
             coin::deposit(reporter_addr, release_coins);
-        } else {
-            // 罚没 (转入协议金库)
+        }
+        // 罚没 (转入协议金库)
+        else {
             coin::deposit(TREASURY_ADDR, release_coins);
         };
 
@@ -289,6 +294,7 @@ module protocol_75::asset_manager {
         if (!exists<YieldPosition>(user)) {
             return (0, 0, 0)
         };
+
         let pos = borrow_global<YieldPosition>(user);
         (coin::value(&pos.principal), pos.lock_until, pos.status)
     }

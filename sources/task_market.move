@@ -91,13 +91,13 @@ module protocol_75::task_market {
         pool: Table<u8, TaskConfigItem>
     }
 
-    /// 模块初始化
+    /// 模块初始化 (仅在部署时调用)
     /// 设置默认支持的任务类型与参数
     fun init_module(admin: &signer) {
         // 创建任务池的默认配置表
         let pool = table::new<u8, TaskConfigItem>();
 
-        // 1. 卡路里消耗 (Calories Burned)
+        // 默认任务1. 卡路里消耗 (Calories Burned)
         // 目标：200千卡 - 10000千卡
         pool.add(
             TASK_CALORIES_BURNED,
@@ -109,7 +109,7 @@ module protocol_75::task_market {
                 is_active: true
             }
         );
-        // 2. 锻炼时长 (Exercise Duration)
+        // 默认任务2. 锻炼时长 (Exercise Duration)
         // 目标：30分钟 - 300分钟
         pool.add(
             TASK_EXERCISE_DURATION,
@@ -121,7 +121,7 @@ module protocol_75::task_market {
                 is_active: true
             }
         );
-        // 3. 合规睡眠时长 (Sleep Duration)
+        // 默认任务3. 合规睡眠时长 (Sleep Duration)
         // 目标：420分钟(7h) - 540分钟(9h)
         pool.add(
             TASK_SLEEP_DURATION,
@@ -133,7 +133,7 @@ module protocol_75::task_market {
                 is_active: true
             }
         );
-        // 4. 冥想时长 (Meditation Duration)
+        // 默认任务4. 冥想时长 (Meditation Duration)
         // 目标：10分钟 - 120分钟
         pool.add(
             TASK_MEDITATION_DURATION,
@@ -172,18 +172,24 @@ module protocol_75::task_market {
     ) acquires TaskPool {
         // 鉴权检查
         assert!(signer::address_of(admin) == ADMIN_ADDR, E_NOT_ADMIN);
-        // 参数合法性检查
+        // 参数边界检查
         assert!(goal_min <= goal_max, E_INVALID_TASK_EDGES);
 
-        // 借用可变的 TaskPool 资源
-        let pool = &mut borrow_global_mut<TaskPool>(ADMIN_ADDR).pool;
-        let item = TaskConfigItem { name, weight, goal_min, goal_max, is_active };
+        let task_pool = borrow_global_mut<TaskPool>(ADMIN_ADDR);
+        let pool = &mut task_pool.pool;
 
+        let task_config_item = TaskConfigItem {
+            name,
+            weight,
+            goal_min,
+            goal_max,
+            is_active
+        };
         // 存在则更新，不存在则添加
         if (pool.contains(task_id)) {
-            *pool.borrow_mut(task_id) = item;
+            *pool.borrow_mut(task_id) = task_config_item;
         } else {
-            pool.add(task_id, item);
+            pool.add(task_id, task_config_item);
         }
     }
 
@@ -195,8 +201,8 @@ module protocol_75::task_market {
     /// @param goal: 用户承诺或完成的任务数值
     /// @return TaskAtom: 验证通过的任务原子对象
     public fun new_task_atom(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
-        // 借用不可变的 TaskPool 资源
-        let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
+        let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
+        let pool = &task_pool.pool;
         let task_config_item = pool.borrow(task_id);
 
         // 检查任务配置是否存在
@@ -233,8 +239,8 @@ module protocol_75::task_market {
     /// @param task_atoms: 任务原子列表引用
     /// @return u64: 总难度系数
     fun calculate_difficulty(task_atoms: &vector<TaskAtom>): u64 acquires TaskPool {
-        // 借用不可变的 TaskPool 资源
-        let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
+        let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
+        let pool = &task_pool.pool;
 
         let total_difficulty = 0;
         let len = task_atoms.length();
@@ -276,13 +282,16 @@ module protocol_75::task_market {
     /// @return goal_max: 目标上限
     /// @return is_active: 是否启用
     public fun get_task_config(task_id: u8): (vector<u8>, u64, u64, u64, bool) acquires TaskPool {
-        let pool = &borrow_global<TaskPool>(ADMIN_ADDR).pool;
+        let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
+        let pool = &task_pool.pool;
+
         if (!pool.contains(task_id)) {
             return (b"", 0, 0, 0, false)
         };
 
-        let item = pool.borrow(task_id);
-        (item.name, item.weight, item.goal_min, item.goal_max, item.is_active)
+        let TaskConfigItem { name, weight, goal_min, goal_max, is_active } =
+            *pool.borrow(task_id);
+        (name, weight, goal_min, goal_max, is_active)
     }
 
     // 单元测试 -------------------------------------------------------
@@ -343,10 +352,10 @@ module protocol_75::task_market {
     /// 测试管理员配置更新 (Upsert)
     ///
     /// **测试场景**：
-    /// 1. 验证默认睡眠任务难度 (480min = 480分)
-    /// 2. Admin 修改睡眠任务：权重设为 2，范围调整为 400-800
-    /// 3. 验证修改后的难度 (480min * 2 = 960分)
-    /// 4. Admin 新增任务类型 (ID=5)，并验证新任务计算
+    /// - 验证默认睡眠任务难度 (480min = 480分)
+    /// - Admin 修改睡眠任务：权重设为 2，范围调整为 400-800
+    /// - 验证修改后的难度 (480min * 2 = 960分)
+    /// - Admin 新增任务类型 (ID=5)，并验证新任务计算
     fun test_upsert_task(admin: &signer) acquires TaskPool {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
@@ -404,7 +413,7 @@ module protocol_75::task_market {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
-        // 1. 禁用卡路里任务 (ID=1)
+        // 禁用卡路里任务 (ID=1)
         upsert_task_pool(
             admin,
             TASK_CALORIES_BURNED,
@@ -415,7 +424,7 @@ module protocol_75::task_market {
             false // is_active = false
         );
 
-        // 2. 尝试创建该类型的任务原子 -> 预期失败
+        // 尝试创建该类型的任务原子 -> 预期失败
         new_task_atom(TASK_CALORIES_BURNED, 500);
     }
 
@@ -439,14 +448,14 @@ module protocol_75::task_market {
         account::create_account_for_test(signer::address_of(admin));
         init_module(admin);
 
-        // 1. 创建合法的 Atom: Goal=300 (当前 Min=200)
+        // 创建合法的 Atom: Goal=300 (当前 Min=200)
         let atom = new_task_atom(TASK_CALORIES_BURNED, 300);
         let task_atoms = vector::singleton(atom);
 
-        // 2. 此时计算应该是成功的
+        // 此时计算应该是成功的
         assert!(calculate_difficulty(&task_atoms) == 300, 0);
 
-        // 3. 管理员更新配置，将 Min 提高到 400
+        // 管理员更新配置，将 Min 提高到 400
         upsert_task_pool(
             admin,
             TASK_CALORIES_BURNED,
