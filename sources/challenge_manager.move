@@ -9,7 +9,6 @@ module protocol_75::challenge_manager {
     use aptos_std::table::{Self, Table};
     use aptos_framework::timestamp;
     use aptos_framework::coin;
-    use aptos_framework::aptos_coin::AptosCoin;
 
     use protocol_75::task_market;
     use protocol_75::bio_credit;
@@ -67,14 +66,12 @@ module protocol_75::challenge_manager {
         };
         task_market::new_task_combo(tasks);
 
-        // 1. 提取资金 (从用户钱包取钱)
-        // 真实场景：需要先 coin::withdraw 出来
-        // 注意：Aptos 中 entry 函数不能直接传 Coin 对象，所以得在这里 withdraw
-        let coins = coin::withdraw<AptosCoin>(user, stake_amount);
+        // 1. 提取资金 (从用户钱包取钱)交给 Asset Manager 处理
+        // Asset Manager 内部会调用 coin::withdraw
 
         // 2. 存入资产管理器 (调用 asset_manager)
         // 假设锁定 7 天 (604800秒)
-        asset_manager::deposit_and_stake(user, coins, team_hash, 604800);
+        asset_manager::deposit_and_stake(user, stake_amount, team_hash, 604800);
     }
 
     /// Seq 3: 每日打卡
@@ -96,7 +93,7 @@ module protocol_75::challenge_manager {
         bio_credit::record_daily_activity(
             user_addr,
             date_key,
-            steps,
+            steps > 0,
             timestamp::now_seconds(),
             oracle_sig
         );
@@ -123,21 +120,17 @@ module protocol_75::challenge_manager {
             // 简化逻辑：成功=0(退款), 失败=1(罚没)
             // 注意：liquidate 返回的是 Coin，我们需要存回用户或国库
             // 这里为了简化演示，假设全部退回或销毁，不处理复杂的受益人分账
-            let liquidation_type = if (is_success) { 0 }
-            else { 1 };
 
             // 只有当用户真的有资产锁仓时才清算
-            // 真实生产环境需要更严谨的检查，防止 abort
-            let returned_coin =
-                asset_manager::liquidate_position(
-                    user_addr, liquidation_type, vector::empty()
-                );
+            let returned_coin = asset_manager::extract_funds(user_addr);
 
             // 将钱还给用户 (如果 coin 不为 0)
-            if (coin::value(&returned_coin) > 0) {
+            if (is_success) {
                 coin::deposit(user_addr, returned_coin);
             } else {
-                coin::destroy_zero(returned_coin);
+                // 简单罚没：转给 admin (这里暂用 destroy 或 deposit 到 treasury)
+                // 假设 @protocol_75 是 treasury
+                coin::deposit(@protocol_75, returned_coin);
             };
 
             // 2. 信用分更新 (调用 bio_credit)
@@ -175,8 +168,9 @@ module protocol_75::challenge_manager {
 
     #[test_only]
     use aptos_framework::account;
+
     #[test_only]
-    use aptos_framework::aptos_coin;
+    use protocol_75::test_usd::{TestUSD, init_for_test, mint_for_test};
 
     #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     /// 测试完整流程
@@ -185,7 +179,7 @@ module protocol_75::challenge_manager {
     ) {
         // 1. 初始化环境
         timestamp::set_time_has_started_for_testing(framework);
-        let (burn, mint) = aptos_coin::initialize_for_test(framework);
+        init_for_test(admin);
 
         // 2. 初始化合约 (模拟部署)
         init_module(admin);
@@ -194,8 +188,8 @@ module protocol_75::challenge_manager {
         // 3. 准备用户
         let user_addr = signer::address_of(user);
         account::create_account_for_test(user_addr);
-        coin::register<AptosCoin>(user);
-        let coins = coin::mint<AptosCoin>(1000, &mint);
+        coin::register<TestUSD>(user);
+        let coins = mint_for_test(admin, 1000);
         coin::deposit(user_addr, coins);
 
         // 4. 用户注册 SBT
@@ -223,13 +217,13 @@ module protocol_75::challenge_manager {
 
         // 8. 验证
         // 钱应该退回来了 (1000 - 100 + 100 = 1000)
-        assert!(coin::balance<AptosCoin>(user_addr) == 1000, 0);
+        assert!(coin::balance<TestUSD>(user_addr) == 1000, 0);
         // 分数应该增加
         assert!(bio_credit::get_score(user_addr) == 51, 1);
 
         // 清理
-        coin::destroy_burn_cap(burn);
-        coin::destroy_mint_cap(mint);
+        // coin::destroy_burn_cap(burn);
+        // coin::destroy_mint_cap(mint);
     }
 }
 

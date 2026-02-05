@@ -22,12 +22,9 @@
 module protocol_75::asset_manager {
     use std::signer;
     use aptos_framework::coin::{Self, Coin};
-    use aptos_framework::aptos_coin::AptosCoin; // TODO: 生产环境替换为稳定币
+    use protocol_75::test_usd::TestUSD;
     use aptos_framework::timestamp;
 
-    // 友元声明 (Friend Declarations) -----------------------------------
-
-    /// 允许 challenge_manager 模块调用友元接口
     friend protocol_75::challenge_manager;
 
     // 错误码 (Error Codes) --------------------------------------------
@@ -67,7 +64,7 @@ module protocol_75::asset_manager {
     /// 存储用户质押在协议中的资金及其状态。
     struct YieldPosition has key {
         /// 质押的代币资产 (当前锁定为 AptosCoin)
-        principal: Coin<AptosCoin>,
+        principal: Coin<TestUSD>,
         /// 锁仓截止时间 (用于逃生舱逻辑判断)
         lock_until: u64,
         /// 绑定的挑战哈希 (用于上层业务校验)
@@ -80,14 +77,14 @@ module protocol_75::asset_manager {
     /// 当用户发起举报时，临时托管其保证金。
     struct ReportBond has key {
         /// 保证金代币
-        coins: Coin<AptosCoin>,
+        coins: Coin<TestUSD>,
         /// 保证金额度
         amount: u64,
         /// 举报者地址 (冗余存储，便于校验)
         reporter: address
     }
 
-    // 用户接口 (Public Entries) ----------------------------------------
+    // 公开接口 (Public Entries) ----------------------------------------
 
     /// 逃生舱强制提款 (Emergency Withdraw)
     ///
@@ -114,8 +111,8 @@ module protocol_75::asset_manager {
             move_from<YieldPosition>(user_addr);
 
         // 如果用户还没注册 CoinStore，自动注册以免转账失败
-        if (!coin::is_account_registered<AptosCoin>(user_addr)) {
-            coin::register<AptosCoin>(user);
+        if (!coin::is_account_registered<TestUSD>(user_addr)) {
+            coin::register<TestUSD>(user);
         };
         coin::deposit(user_addr, principal);
     }
@@ -154,11 +151,11 @@ module protocol_75::asset_manager {
         let payment =
             // 追加质押场景，提取代币
             if (amount > 0) {
-                coin::withdraw<AptosCoin>(user, amount)
+                coin::withdraw<TestUSD>(user, amount)
             }
             // 资金复用场景，直接返回零代币
             else {
-                coin::zero<AptosCoin>()
+                coin::zero<TestUSD>()
             };
 
         // 检查是否存在现有仓位
@@ -246,8 +243,8 @@ module protocol_75::asset_manager {
     /// *注意*：调用者 (`challenge_manager`) 负责决定这笔钱是退给用户、还是分给举报者。
     ///
     /// @param user_addr: 目标用户地址
-    /// @return Coin<AptosCoin>: 提取出的全部本金
-    public(friend) fun extract_funds(user_addr: address): Coin<AptosCoin> acquires YieldPosition {
+    /// @return Coin<TestUSD>: 提取出的全部本金
+    public(friend) fun extract_funds(user_addr: address): Coin<TestUSD> acquires YieldPosition {
         assert!(exists<YieldPosition>(user_addr), E_NO_POSITION);
 
         // 彻底移出资源 (Move From)
@@ -267,7 +264,7 @@ module protocol_75::asset_manager {
     public(friend) fun collect_report_bond(
         reporter: &signer, amount: u64
     ) acquires ReportBond {
-        let coins = coin::withdraw<AptosCoin>(reporter, amount);
+        let coins = coin::withdraw<TestUSD>(reporter, amount);
         let reporter_addr = signer::address_of(reporter);
 
         // 如果已有保证金记录，则追加 (支持多重举报场景)
@@ -341,20 +338,21 @@ module protocol_75::asset_manager {
 
     #[test_only]
     use aptos_framework::account;
-    #[test_only]
-    use aptos_framework::coin::{BurnCapability, MintCapability};
 
     #[test_only]
-    /// 辅助函数：初始化环境并领取 AptosCoin
-    /// 返回：(Minted Coins, BurnCapability, MintCapability)
+    /// 辅助函数：初始化环境并领取 TestUSD
+    /// 返回：(Minted Coins)
     fun setup_test(
-        admin: &signer, user: &signer, time: u64
-    ): (Coin<AptosCoin>, BurnCapability<AptosCoin>, MintCapability<AptosCoin>) {
+        admin: &signer,
+        user: &signer,
+        framework: &signer,
+        time: u64
+    ): Coin<TestUSD> {
         let admin_addr = signer::address_of(admin);
         let user_addr = signer::address_of(user);
 
         // 1. 初始化 Aptos 框架 (时间戳等)
-        timestamp::set_time_has_started_for_testing(admin);
+        timestamp::set_time_has_started_for_testing(framework);
         timestamp::update_global_time_for_test_secs(time);
 
         // 2. 创建账户
@@ -366,21 +364,23 @@ module protocol_75::asset_manager {
         };
 
         // 3. 初始化 Coin 和 AssetManager
-        let (burn_cap, mint_cap) =
-            aptos_framework::aptos_coin::initialize_for_test(admin);
+        protocol_75::test_usd::init_for_test(admin);
 
         // 注册用户并铸造代币以便测试用于 deposit
-        coin::register<AptosCoin>(user);
-        let coins = coin::mint<AptosCoin>(1000000, &mint_cap);
+        coin::register<TestUSD>(user);
+        let coins = protocol_75::test_usd::mint_for_test(admin, 1000000);
 
-        (coins, burn_cap, mint_cap)
+        coins
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     /// 测试核心流程：质押 -> 补仓 -> 跨队复用 -> 提款
-    fun test_lifecycle_happy_path(admin: &signer, user: &signer) acquires YieldPosition {
+    fun test_lifecycle_happy_path(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
         // 设置初始时间为 1000秒
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         let user_addr = signer::address_of(user);
 
         // 给用户发 1000 块钱
@@ -417,26 +417,28 @@ module protocol_75::asset_manager {
         assert!(coin::value(&extracted) == 150, 8);
 
         // 销毁提取出来的代币，防止资源泄漏
-        coin::burn(extracted, &burn_cap);
+        protocol_75::test_usd::burn_for_test(extracted);
 
         // 确认资源已清除
         assert!(!exists<YieldPosition>(user_addr), 9);
 
-        // 销毁 Capabilities
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     #[expected_failure(abort_code = E_INVALID_LOCK_TIME)]
     /// 测试安全性：禁止在同小队补仓时修改时间
-    fun test_topup_lock_restriction(admin: &signer, user: &signer) acquires YieldPosition {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+    fun test_topup_lock_restriction(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
 
         // 销毁 Caps (因为后面会 abort，如果不提前处理可能会有问题，但在 expected_failure 中通常无需清理)
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         // 初始：Lock=2000
         deposit_and_stake(user, 100, vector[1], 2000);
@@ -445,17 +447,18 @@ module protocol_75::asset_manager {
         deposit_and_stake(user, 50, vector[1], 1500);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     #[expected_failure(abort_code = E_INVALID_LOCK_TIME)]
     /// 测试安全性：禁止在同小队补仓时修改时间 (延长也不行)
     fun test_topup_lock_restriction_extend(
-        admin: &signer, user: &signer
+        admin: &signer, user: &signer, framework: &signer
     ) acquires YieldPosition {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         deposit_and_stake(user, 100, vector[1], 2000);
 
@@ -463,14 +466,17 @@ module protocol_75::asset_manager {
         deposit_and_stake(user, 50, vector[1], 2500);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     /// 测试安全性：跨小队 Rollover 时的 Max 逻辑
-    fun test_rollover_max_logic(admin: &signer, user: &signer) acquires YieldPosition {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+    fun test_rollover_max_logic(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         // 初始：Lock=5000 (很久以后)
         deposit_and_stake(user, 100, vector[1], 5000);
@@ -484,15 +490,18 @@ module protocol_75::asset_manager {
         assert!(lock_until == 5000, 1);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     /// 测试风控：冻结与解冻
-    fun test_freeze_logic(admin: &signer, user: &signer) acquires YieldPosition {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+    fun test_freeze_logic(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
         let user_addr = signer::address_of(user);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         deposit_and_stake(user, 100, vector[1], 2000);
 
@@ -507,15 +516,18 @@ module protocol_75::asset_manager {
         assert!(status_2 == POSITION_STATUS_ACTIVE, 2);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     #[expected_failure(abort_code = E_POSITION_FROZEN)]
     /// 测试风控：冻结状态下禁止追加资金
-    fun test_freeze_prevents_topup(admin: &signer, user: &signer) acquires YieldPosition {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+    fun test_freeze_prevents_topup(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         deposit_and_stake(user, 100, vector[1], 2000);
         freeze_position(signer::address_of(user));
@@ -524,15 +536,18 @@ module protocol_75::asset_manager {
         deposit_and_stake(user, 50, vector[1], 2000);
     }
 
-    #[test(admin = @protocol_75, user = @0x123)]
+    #[test(admin = @protocol_75, user = @0x123, framework = @0x1)]
     /// 测试逃生舱：时间锁过期后的强制提款
-    fun test_emergency_withdraw(admin: &signer, user: &signer) acquires YieldPosition {
+    fun test_emergency_withdraw(
+        admin: &signer, user: &signer, framework: &signer
+    ) acquires YieldPosition {
         // 当前时间 1000
-        let (coins, burn_cap, mint_cap) = setup_test(admin, user, 1000);
+        // 设置初始时间为 1000秒
+        let coins = setup_test(admin, user, framework, 1000);
         coin::deposit(signer::address_of(user), coins);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         // 锁仓到 2000
         deposit_and_stake(user, 100, vector[1], 2000);
@@ -552,7 +567,7 @@ module protocol_75::asset_manager {
 
         // 钱应该回到余额里
         assert!(
-            coin::balance<AptosCoin>(signer::address_of(user)) == 1100,
+            coin::balance<TestUSD>(signer::address_of(user)) == 1100,
             1
         );
         assert!(
@@ -561,29 +576,31 @@ module protocol_75::asset_manager {
         );
     }
 
-    #[test(admin = @protocol_75, reporter = @0x456)]
+    #[test(admin = @protocol_75, reporter = @0x456, framework = @0x1)]
     /// 测试保证金逻辑
-    fun test_bond_logic(admin: &signer, reporter: &signer) acquires ReportBond {
-        let (coins, burn_cap, mint_cap) = setup_test(admin, reporter, 1000);
+    fun test_bond_logic(
+        admin: &signer, reporter: &signer, framework: &signer
+    ) acquires ReportBond {
+        let coins = setup_test(admin, reporter, framework, 1000);
         coin::deposit(signer::address_of(reporter), coins);
         let reporter_addr = signer::address_of(reporter);
 
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
+        // coin::destroy_burn_cap(burn_cap);
+        // coin::destroy_mint_cap(mint_cap);
 
         // 1. 缴纳保证金 200
         collect_report_bond(reporter, 200);
-        assert!(coin::balance<AptosCoin>(reporter_addr) == 800, 1); // 1000 - 200
+        assert!(coin::balance<TestUSD>(reporter_addr) == 800, 1); // 1000 - 200
 
         // 2. 退还 100 (举报成功一半)
         release_or_seize_report_bond(reporter_addr, 100, true);
-        assert!(coin::balance<AptosCoin>(reporter_addr) == 900, 2); // 800 + 100
+        assert!(coin::balance<TestUSD>(reporter_addr) == 900, 2); // 800 + 100
 
         // 3. 罚没 100 (恶意举报)
         release_or_seize_report_bond(reporter_addr, 100, false);
         // 钱应该进了 TREASURY (@protocol_75)
         // 注意：test setup 里 admin 也可能有钱，这里简单验证 reporter 没收到钱
-        assert!(coin::balance<AptosCoin>(reporter_addr) == 900, 3);
+        assert!(coin::balance<TestUSD>(reporter_addr) == 900, 3);
 
         // 验证 Bond 资源被销毁 (因为余额已空)
         assert!(!exists<ReportBond>(reporter_addr), 4);

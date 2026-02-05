@@ -22,9 +22,6 @@ module protocol_75::task_market {
     use std::signer;
     use aptos_std::table::{Self, Table};
 
-    // 友元声明 (Friend Declarations) -----------------------------------
-
-    /// 允许 challenge_manager 模块调用友元接口
     friend protocol_75::challenge_manager;
 
     // 错误码 (Error Codes) --------------------------------------------
@@ -58,7 +55,7 @@ module protocol_75::task_market {
 
     /// 任务原子 (Task Atom)
     /// 代表一个具体的、可量化的任务单元。
-    struct TaskAtom has store, drop {
+    struct TaskAtom has store, drop, copy {
         /// 任务类型 ID
         task_id: u8,
         /// 任务目标数值 (单位取决于具体任务类型，如 kcal, min)
@@ -67,7 +64,7 @@ module protocol_75::task_market {
 
     /// 任务组合 (Task Combo)
     /// 包含一组任务原子及其计算出的综合难度。
-    struct TaskCombo has store, drop {
+    struct TaskCombo has store, drop, copy {
         /// 任务原子列表
         task_atoms: vector<TaskAtom>,
         /// 综合难度系数
@@ -76,7 +73,7 @@ module protocol_75::task_market {
 
     /// 任务配置项 (Task Config Item)
     /// 存储每种任务类型的规则参数。
-    struct TaskConfigItem has store, drop {
+    struct TaskConfigItem has store, drop, copy {
         /// 任务名称 (如 "Calories Burned")
         name: vector<u8>,
         /// 任务难度权重 (每单位目标值对应的难度分数)
@@ -234,7 +231,7 @@ module protocol_75::task_market {
         TaskCombo { task_atoms, difficulty }
     }
 
-    // 内部私有方法 (Private Methods) -------------------------------------
+    // 私有方法 (Private Methods) ---------------------------------------
 
     /// 计算任务组合的综合难度系数 (Calculate Difficulty)
     ///

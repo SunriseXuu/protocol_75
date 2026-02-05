@@ -29,9 +29,6 @@ module protocol_75::bio_credit {
 
     use protocol_75::badge_factory::AchievementBadge;
 
-    // 友元声明 (Friend Declarations) -----------------------------------
-
-    /// 允许 challenge_manager 模块调用友元接口
     friend protocol_75::challenge_manager;
 
     // 错误码 (Error Codes) --------------------------------------------
@@ -118,7 +115,7 @@ module protocol_75::bio_credit {
         activity_log: Table<String, DailyData>
     }
 
-    // 用户接口 (Public Entries) ----------------------------------------
+    // 公开接口 (Public Entries) ----------------------------------------
 
     /// 用户注册 (Register User)
     ///
@@ -252,7 +249,7 @@ module protocol_75::bio_credit {
             // 清零连胜
             soul.personal_streak = 0;
 
-            // 扣分逻辑：固定扣除 CREDIT_BASE_REW信用ARD 分 (TODO: 根据难度动态调整)
+            // 扣分逻辑：固定扣除 REWARD_BASE_RATE 信用分 (TODO: 根据难度动态调整)
             if (soul.score > CREDIT_MIN + REWARD_BASE_RATE) {
                 soul.score -= REWARD_BASE_RATE;
             } else {
@@ -279,7 +276,7 @@ module protocol_75::bio_credit {
         soul.badges.push_back(badge);
     }
 
-    // 内部私有方法 (Private Methods) -------------------------------------
+    // 私有方法 (Private Methods) ---------------------------------------
 
     /// 应用自然衰减 (Apply Lazy Decay)
     ///
