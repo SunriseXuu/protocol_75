@@ -44,13 +44,15 @@ module protocol_75::challenge_manager {
     /// user: 发起人
     /// task_ids: 任务 ID 列表
     /// task_params: 任务参数列表
+    /// check_in_min: 打卡次数下限
+    /// challenge_hash: 挑战哈希
     /// stake_amount: 质押金额
-    /// team_hash: 小队哈希
     public entry fun create_challenge(
         user: &signer,
         task_ids: vector<u8>,
         task_params: vector<u64>,
-        team_hash: vector<u8>,
+        check_in_min: u64,
+        challenge_hash: vector<u8>,
         stake_amount: u64
     ) {
         // 构造 TaskCombo
@@ -64,14 +66,14 @@ module protocol_75::challenge_manager {
             tasks.push_back(task);
             i += 1;
         };
-        task_market::new_task_combo(tasks);
+        task_market::new_task_combo(tasks, check_in_min);
 
         // 1. 提取资金 (从用户钱包取钱)交给 Asset Manager 处理
         // Asset Manager 内部会调用 coin::withdraw
 
         // 2. 存入资产管理器 (调用 asset_manager)
         // 假设锁定 7 天 (604800秒)
-        asset_manager::deposit_and_stake(user, stake_amount, team_hash, 604800);
+        asset_manager::deposit_and_stake(user, stake_amount, challenge_hash, 604800);
     }
 
     /// Seq 3: 每日打卡
@@ -90,7 +92,7 @@ module protocol_75::challenge_manager {
 
         // 3. 记录数据 (调用 bio_credit)
         let user_addr = signer::address_of(user);
-        bio_credit::record_daily_activity(
+        bio_credit::record_daily_checkin(
             user_addr,
             date_key,
             steps > 0,
@@ -203,6 +205,7 @@ module protocol_75::challenge_manager {
             user,
             task_ids,
             task_params,
+            10,
             vector::empty(),
             100
         );

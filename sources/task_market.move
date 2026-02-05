@@ -68,7 +68,9 @@ module protocol_75::task_market {
         /// 任务原子列表
         task_atoms: vector<TaskAtom>,
         /// 综合难度系数
-        difficulty: u64
+        difficulty: u64,
+        /// 打卡次数下限
+        check_in_min: u64
     }
 
     /// 任务配置项 (Task Config Item)
@@ -223,12 +225,15 @@ module protocol_75::task_market {
     /// 构建任务组合 (New Task Combo)
     ///
     /// @param task_atoms: 用于组合任务的任务原子列表
+    /// @param check_in_min: 打卡次数下限
     /// @return TaskCombo: 新的任务组合
-    public(friend) fun new_task_combo(task_atoms: vector<TaskAtom>): TaskCombo acquires TaskPool {
+    public(friend) fun new_task_combo(
+        task_atoms: vector<TaskAtom>, check_in_min: u64
+    ): TaskCombo acquires TaskPool {
         // 根据传入的任务原子列表，计算总难度并打包
         let difficulty = calculate_difficulty(&task_atoms);
 
-        TaskCombo { task_atoms, difficulty }
+        TaskCombo { task_atoms, difficulty, check_in_min }
     }
 
     // 私有方法 (Private Methods) ---------------------------------------
