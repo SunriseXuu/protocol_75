@@ -6,6 +6,12 @@
 /// - 能量积分计算
 /// - 分数衰减计算
 ///
+/// ## 为什么选择链上计算？(Why On-chain?)
+/// 1. **信任源 (Root of Trust)**: 所有的计算规则公开透明且不可篡改。相比于预言机 (Oracle) 方案，用户不需要通过信任项目方的服务器来确信分数的公正性。
+/// 2. **数据原子性 (Atomicity)**: 分数更新与打卡行为在同一笔交易内原子完成，避免了链下计算带来的异步延迟和状态不一致风险。
+/// 3. **透明可审计 (Auditability)**: 社区可以随时验证算法的公平性，确保“越难越赚”的机制不被黑箱操作。
+/// 4. **Gas 效率 (Efficiency)**: 本模块经过高度优化的整数运算 (Integer Math) 消耗的计算资源极低。相比于在链上验证复杂的密码学签名 (Signature Verification) 所需的昂贵 Gas，直接在链上计算数学公式反而更加经济高效。
+///
 /// 核心思想：输入状态 + 配置 -> 输出新状态 (Pure Functions)
 module protocol_75::bio_math {
     friend protocol_75::bio_credit;
@@ -16,7 +22,7 @@ module protocol_75::bio_math {
     const CREDIT_MAX: u64 = 95_000_000;
 
     // 能量参数 (Base Energy) - 用于计算衰减和默认惩罚
-    const DECAY_BASE_ENERGY: u64 = 500_000;
+    const ENERGY_DECAY_BASE: u64 = 500_000;
 
     /// 能量曲线参数 (Energy Curve Parameters)
     /// 对应 BioCreditConfig 中的数值部分
@@ -200,7 +206,7 @@ module protocol_75::bio_math {
             let current_cost = calculate_cost_at(current_score, params);
 
             // B. 计算总的基础衰减能量 (天数 * 每天的基础能量)
-            let total_decay_base = days_passed * DECAY_BASE_ENERGY;
+            let total_decay_base = days_passed * ENERGY_DECAY_BASE;
 
             // C. 放大衰减量： 总能量 * Cost / Scaling
             //    Example: 10天 * 500k * Cost(3.0) = 5M * 3.0 = 15M Score Loss

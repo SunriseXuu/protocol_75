@@ -44,14 +44,14 @@ module protocol_75::challenge_manager {
     /// user: 发起人
     /// task_ids: 任务 ID 列表
     /// task_params: 任务参数列表
-    /// check_in_min: 打卡次数下限
+    /// daily_checkin_min: “每日打卡”次数下限
     /// challenge_hash: 挑战哈希
     /// stake_amount: 质押金额
     public entry fun create_challenge(
         user: &signer,
         task_ids: vector<u8>,
         task_params: vector<u64>,
-        check_in_min: u64,
+        daily_checkin_min: u64,
         challenge_hash: vector<u8>,
         stake_amount: u64
     ) {
@@ -66,7 +66,7 @@ module protocol_75::challenge_manager {
             tasks.push_back(task);
             i += 1;
         };
-        task_market::new_task_combo(tasks, check_in_min);
+        task_market::new_task_combo(tasks, daily_checkin_min);
 
         // 1. 提取资金 (从用户钱包取钱)交给 Asset Manager 处理
         // Asset Manager 内部会调用 coin::withdraw
@@ -104,14 +104,21 @@ module protocol_75::challenge_manager {
     /// Seq 4: 结算挑战 (由 Admin 调用)
     /// users: 队员列表
     /// results: 对应的结果 (true=达标, false=违约)
+    /// challenge_difficulty: 挑战对应的难度系数
+    /// daily_checkin_counts: 每个用户的“每日打卡”次数
     public entry fun settle_challenge(
-        admin: &signer, users: vector<address>, results: vector<bool>
+        admin: &signer,
+        users: vector<address>,
+        results: vector<bool>,
+        daily_checkin_counts: vector<u64>,
+        difficulty: u64
     ) {
         // 验证 Admin 权限 (这里假设部署者即 Admin)
         assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
 
         let len = users.length();
         assert!(len == results.length(), E_LENGTH_MISMATCH);
+        assert!(len == daily_checkin_counts.length(), E_LENGTH_MISMATCH);
 
         let i = 0;
         while (i < len) {
@@ -136,7 +143,11 @@ module protocol_75::challenge_manager {
             };
 
             // 2. 信用分更新 (调用 bio_credit)
-            bio_credit::update_score_and_streak(user_addr, is_success, 10);
+            // Passing difficulty and daily_checkin_count (from args)
+            let daily_checkin_cnt = daily_checkin_counts[i];
+            bio_credit::update_score_and_streak(
+                user_addr, is_success, difficulty, daily_checkin_cnt
+            );
 
             // 3. 尝试发奖 (如果连胜 > 3)
             let current_streak = bio_credit::get_personal_streak(user_addr);
@@ -216,13 +227,36 @@ module protocol_75::challenge_manager {
         // 7. 结算 (User 成功)
         let users = vector::singleton(user_addr);
         let results = vector::singleton(true);
-        settle_challenge(admin, users, results);
+        let checkin_counts = vector::singleton<u64>(10);
+        // Difficulty 500 (Assuming simple sum of task params? No, calculate_difficulty logic)
+        // Task 1 (Cardio) Weight=?(Wait, test creates Task 1?)
+        // In task_market.move, ID 1 is Calories(Weight 1). ID 2 is Duration(Weight 10).
+        // create_challenge uses ID 1 (Calories). Task Param = 300.
+        // Diff = 1 * 300 = 300.
+        let difficulty = 300;
+
+        settle_challenge(
+            admin,
+            users,
+            results,
+            checkin_counts,
+            difficulty
+        );
 
         // 8. 验证
         // 钱应该退回来了 (1000 - 100 + 100 = 1000)
         assert!(coin::balance<TestUSD>(user_addr) == 1000, 0);
         // 分数应该增加
-        assert!(bio_credit::get_score(user_addr) == 51, 1);
+        // Old Logic: fixed reward.
+        // New Logic:
+        // Energy = Diff(300) * Count(10) * Factor(600) = 1,800,000
+        // Init Score = 50.0 (50,000,000)
+        // Cost at 50.0 = 1.25 (1,250,000 / 1M)
+        // dScore ~= 1.8M / 1.25 = 1.44M = 1.44 points.
+        // New Score ~= 51.44
+        // Assertion: > 51 (to be safe)
+        let new_score = bio_credit::get_score(user_addr);
+        assert!(new_score > 51000000, 1);
 
         // 清理
         // coin::destroy_burn_cap(burn);

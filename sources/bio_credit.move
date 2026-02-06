@@ -63,10 +63,22 @@ module protocol_75::bio_credit {
     /// 默认衰减豁免期 (48小时)
     const DEFAULT_DECAY_GRACE_PERIOD: u64 = 172800;
 
-    /// 奖励基础能量 (1.0)
-    const REWARD_BASE_ENERGY: u64 = 1_000_000;
-    /// 衰减基础能量 (0.5)
-    const DECAY_BASE_ENERGY: u64 = 500_000;
+    /// 能量放大系数 (Scaling Factor)
+    /// 用于将任务难度系数 (Difficulty) 转换为链上能量值。
+    /// 计算逻辑：
+    /// - 设计目标: 50 -> 75 分 需要大约 6个月 (180天)。
+    /// - 总能量需求: ~52.5M
+    /// - 每日能量: ~300k
+    /// - 假设平均每日任务难度: 500
+    /// - Factor = 300,000 / 500 = 600
+    const ENERGY_SCALING_FACTOR: u64 = 600;
+
+    /// 能量衰减基础 (Energy Decay Base)
+    /// 超过豁免期后，每天未打卡扣除的能量值。
+    /// 设计原则: 假设平均每日任务难度: 500 的情况下 1:4 比例 (练一天抵消四天衰减)。
+    /// - 每日奖励能量: ~300,000 (Difficulty 500)
+    /// - 每日衰减能量: 300,000 / 4 = 75,000
+    const ENERGY_DECAY_BASE: u64 = 75_000;
 
     /// 奖励事件
     const EVENT_REWARD: u8 = 1;
@@ -111,7 +123,7 @@ module protocol_75::bio_credit {
         device_hash: vector<u8>,
         /// 获得的勋章列表
         badges: vector<Object<AchievementBadge>>,
-        /// 每日打卡日志
+        /// “每日打卡”日志
         daily_checkin_log: Table<String, DailyData>
     }
 
@@ -270,15 +282,19 @@ module protocol_75::bio_credit {
     ///
     /// @param user: 用户地址
     /// @param is_compliant: 是否合规
-    /// @param _difficulty: 预留参数，未来可根据任务难度调整权重
+    /// @param difficulty: 任务组合的综合难度系数 (由 task_market 计算)
+    /// @param daily_checkin_count: 本次“每日打卡”的次数 (通常为 1, 但支持批量)
     public(friend) fun update_score_and_streak(
-        user: address, is_compliant: bool, _difficulty: u64
+        user: address,
+        is_compliant: bool,
+        difficulty: u64,
+        daily_checkin_count: u64
     ) acquires BioCreditConfig, BioSoul, Events {
         // 若用户未注册，则报错
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
         let config = borrow_global<BioCreditConfig>(@protocol_75);
 
-        // 2. 先应用懒惰衰减 (Decay)
+        // 先应用懒惰衰减 (Decay)
         apply_lazy_decay(user, config);
 
         let bio_soul = borrow_global_mut<BioSoul>(user);
@@ -286,14 +302,18 @@ module protocol_75::bio_credit {
 
         // 如果合规
         if (is_compliant) {
+            // 增加连胜
             bio_soul.personal_streak += 1;
+
+            // 计算本次“每日打卡”产生的总能量 (Total Energy)
+            // 公式: Energy = Difficulty * Count * Factor
+            // 例如: 500 * 1 * 600 = 300,000
+            let energy_gain = difficulty * daily_checkin_count * ENERGY_SCALING_FACTOR;
 
             // 加分积分计算：根据 cost 曲线消耗能量
             let new_score =
                 bio_math::integrate_energy_to_score(
-                    bio_soul.score,
-                    REWARD_BASE_ENERGY,
-                    &config.curve
+                    bio_soul.score, energy_gain, &config.curve
                 );
             bio_soul.score = math64::min(new_score, CREDIT_MAX);
 
@@ -311,30 +331,20 @@ module protocol_75::bio_credit {
             // 清零连胜
             bio_soul.personal_streak = 0;
 
-            // 扣分积分计算：根据 cost 曲线逆向消耗
-            // 使用相同的基础能量 (REWARD_BASE_ENERGY) 作为惩罚基数，或者独立的基数
-            // 对称性原则：Penalty = Reward Energy * Cost(s) ?
-            // 或者是 Integrated Loss? 我们使用 Integrated Loss 来保证真正的对称性。
-            // 即损失同样的能量，在高分段跌得更惨（但其实因为 Cost 高，跌得慢？不对）
-            // 用户意思是：Cost 高 = 加分阻力大 & 扣分衰减大
-            // 这意味着：
-            // 加分有效性 = Energy / Cost (Low)
-            // 扣分有效性 = Energy * Cost (High)
-            // 所以扣分时，我们不解积分方程，而是直接乘数计算？
-            // 或者，我们认为 Energy 是“步数”，而 Cost 是“坡度”。
-            // 往上爬：距离 = 步数 / (1 + 坡度)
-            // 往下滚：距离 = 步数 * (1 + 坡度)
-            // 这种解释更符合直觉。为了不破环积分的“不连续解决”特性，我们
-            // 对微元进行操作：dScore_up = dE / C(s), dScore_down = dE * C(s).
+            // 计算原本应得的能量 (作为惩罚基数)
+            // 对称性原则: 假如你完成了这个难度的任务，你能得多少能量，
+            // 现在你失败了，我们就用这个能量值乘以当前的 Cost 来扣分。
+            // Energy = Difficulty * Count * Factor
+            let energy_base = difficulty * daily_checkin_count * ENERGY_SCALING_FACTOR;
 
-            // 为了简化计算且保持趋势，我们使用近似积分逻辑：
-            // 直接计算当前点的瞬时 Cost，作为放大因子。
-            // Loss = BaseEnergy * CurrentCost / ScalingFactor
             let current_cost = bio_math::calculate_cost_at(
                 bio_soul.score, &config.curve
             );
-            // 扣分 = 基础能量 * 瞬时成本 (Cost 越大，扣得越多)
-            let score_loss = (REWARD_BASE_ENERGY * current_cost) / SCALING_FACTOR;
+
+            // 扣分计算 (Slash)
+            // 扣分 = 能量基数 * 瞬时成本 / 精度
+            // 高分段 Cost 高 -> 扣分更多 (High Risk)
+            let score_loss = (energy_base * current_cost) / SCALING_FACTOR;
 
             if (bio_soul.score > CREDIT_MIN + score_loss) {
                 bio_soul.score -= score_loss;
@@ -424,9 +434,14 @@ module protocol_75::bio_credit {
     ///
     /// @param user: 用户地址
     /// @param is_compliant: 假设任务是否合规
+    /// @param difficulty: 任务难度
+    /// @param daily_checkin_count: “每日打卡”的次数
     /// @return: (预计分数, 分数变化量)
     public fun preview_reward(
-        user: address, is_compliant: bool
+        user: address,
+        is_compliant: bool,
+        difficulty: u64,
+        daily_checkin_count: u64
     ): (u64, u64) acquires BioCreditConfig, BioSoul {
         if (!exists<BioSoul>(user) || !exists<BioCreditConfig>(@protocol_75)) {
             return (0, 0)
@@ -449,19 +464,23 @@ module protocol_75::bio_credit {
         // 2. 模拟结算
         let final_score =
             if (is_compliant) {
+                // 计算能量
+                let energy_gain = difficulty * daily_checkin_count
+                    * ENERGY_SCALING_FACTOR;
+
                 // 加分积分
                 let integrated_score =
                     bio_math::integrate_energy_to_score(
-                        score_after_decay,
-                        REWARD_BASE_ENERGY,
-                        &config.curve
+                        score_after_decay, energy_gain, &config.curve
                     );
                 math64::min(integrated_score, CREDIT_MAX)
             } else {
                 // 扣分倍率
+                let energy_base = difficulty * daily_checkin_count
+                    * ENERGY_SCALING_FACTOR;
                 let current_cost =
                     bio_math::calculate_cost_at(score_after_decay, &config.curve);
-                let score_loss = (REWARD_BASE_ENERGY * current_cost) / SCALING_FACTOR;
+                let score_loss = (energy_base * current_cost) / SCALING_FACTOR;
                 if (score_after_decay > CREDIT_MIN + score_loss) {
                     score_after_decay - score_loss
                 } else {
