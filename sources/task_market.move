@@ -154,7 +154,7 @@ module protocol_75::task_market {
         move_to(admin, TaskPool { pool });
     }
 
-    // 管理员接口 (Admin Public Entries) ---------------------------------
+    // 管理员接口 (Admin Entries) ----------------------------------------
 
     /// 更新或新增任务配置 (Upsert Task Pool)
     ///

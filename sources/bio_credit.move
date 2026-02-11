@@ -33,7 +33,7 @@ module protocol_75::bio_credit {
     use aptos_framework::account;
 
     use protocol_75::badge_factory::AchievementBadge;
-    use protocol_75::bio_math::{Self, EnergyCurveParams};
+    use protocol_75::bio_math;
 
     friend protocol_75::challenge_manager;
 
@@ -50,35 +50,43 @@ module protocol_75::bio_credit {
 
     // 数值常量 (Constants) ---------------------------------------------
 
-    /// 精度因子 (6位小数)
-    const SCALING_FACTOR: u64 = 1_000_000;
+    /// 精度 (Decimals)
+    const DECIMALS: u64 = 1_000_000;
 
-    /// 最低信用分 (35.0)
+    /// 最小信用分
     const CREDIT_MIN: u64 = 35_000_000;
-    /// 最高信用分 (95.0)
-    const CREDIT_MAX: u64 = 95_000_000;
-    /// 初始信用分 (50.0)
+    /// 初始信用分
     const CREDIT_INIT: u64 = 50_000_000;
+    /// 精英信用分
+    const CREDIT_ELITE: u64 = 75_000_000;
+    /// 最大信用分
+    const CREDIT_MAX: u64 = 95_000_000;
 
-    /// 默认衰减豁免期 (48小时)
-    const DEFAULT_DECAY_GRACE_PERIOD: u64 = 172800;
+    /// 成本: 修复期起点 (1.0)
+    const COST_REPAIR_START: u64 = 1_000_000;
+    /// 成本: 修复期终点 (1.25)
+    const COST_REPAIR_END: u64 = 1_250_000;
+    /// 成本: 积累期终点 (3.0)
+    const COST_ACCUM_END: u64 = 3_000_000;
+    /// 成本: 精英期终点 (10.0)
+    const COST_ELITE_END: u64 = 10_000_000;
 
-    /// 能量放大系数 (Scaling Factor)
+    /// 能量放大系数
     /// 用于将任务难度系数 (Difficulty) 转换为链上能量值。
     /// 计算逻辑：
-    /// - 设计目标: 50 -> 75 分 需要大约 6个月 (180天)。
-    /// - 总能量需求: ~52.5M
-    /// - 每日能量: ~300k
+    /// - 设计为 50 -> 75 分 需要大约 6个月 (180天)
+    /// - 计算出总能量需求: ~52.5M
+    /// - 计算出每日能量需求: ~300k
     /// - 假设平均每日任务难度: 500
-    /// - Factor = 300,000 / 500 = 600
+    /// - 所以放大系数 = 300,000 / 500 = 600
     const ENERGY_SCALING_FACTOR: u64 = 600;
-
-    /// 能量衰减基础 (Energy Decay Base)
-    /// 超过豁免期后，每天未打卡扣除的能量值。
-    /// 设计原则: 假设平均每日任务难度: 500 的情况下 1:4 比例 (练一天抵消四天衰减)。
-    /// - 每日奖励能量: ~300,000 (Difficulty 500)
-    /// - 每日衰减能量: 300,000 / 4 = 75,000
+    /// 能量衰减基数
+    /// 计算逻辑：
+    /// - 一日练，四日功，由于每日能量需求: ~300k
+    /// - 所以设计为上述每日能量需求的 1/4 = 75,000
     const ENERGY_DECAY_BASE: u64 = 75_000;
+    /// 衰减豁免期 (48小时)
+    const DECAY_GRACE_PERIOD: u64 = 172800;
 
     /// 奖励事件
     const EVENT_REWARD: u8 = 1;
@@ -88,16 +96,6 @@ module protocol_75::bio_credit {
     const EVENT_DECAY: u8 = 3;
 
     // 数据结构 (Data Structures) ---------------------------------------
-
-    /// 动态配置 (Configuration)
-    /// 存储成本曲线的关键参数，支持在线调整。
-    /// 采用分段线性模型：y = mx + c (Cost = Slope * Score + Intercept)
-    struct BioCreditConfig has key, store, drop, copy {
-        /// 能量曲线参数 (封装了阈值和成本)
-        curve: EnergyCurveParams,
-        /// 衰减豁免期 (秒)
-        decay_grace_period: u64
-    }
 
     /// 用户每日行为数据 (轻量级结构)
     struct DailyData has store, drop {
@@ -123,7 +121,7 @@ module protocol_75::bio_credit {
         device_hash: vector<u8>,
         /// 获得的勋章列表
         badges: vector<Object<AchievementBadge>>,
-        /// “每日打卡”日志
+        /// “每日打卡”日志 (Key: YYYY-MM-DD)
         daily_checkin_log: Table<String, DailyData>
     }
 
@@ -146,65 +144,7 @@ module protocol_75::bio_credit {
         score_events: event::EventHandle<ScoreUpdateEvent>
     }
 
-    /// 模块初始化
-    fun init_module(admin: &signer) {
-        // 初始化默认配置
-        let curve =
-            bio_math::new_curve_params(
-                50_000_000, // 修复期阈值
-                75_000_000, // 精英期阈值
-                1_000_000, // 修复期起始成本
-                1_250_000, // 修复期结束成本
-                3_000_000, // 积累期结束成本
-                10_000_000 // 精英期结束成本
-            );
-
-        move_to(
-            admin,
-            BioCreditConfig { curve, decay_grace_period: DEFAULT_DECAY_GRACE_PERIOD }
-        );
-    }
-
-    // 管理员接口 (Admin Entries) ---------------------------------------
-
-    /// 更新配置 (Update Config)
-    ///
-    /// @param admin: 管理员地址
-    /// @param threshold_repair: 修复期阈值
-    /// @param threshold_elite: 精英期阈值
-    /// @param cost_repair_start: 修复期起始成本
-    /// @param cost_repair_end: 修复期结束成本
-    /// @param cost_accum_end: 积累期结束成本
-    /// @param cost_elite_end: 精英期结束成本
-    /// @param decay_grace_period: 衰减豁免期
-    public entry fun update_config(
-        admin: &signer,
-        threshold_repair: u64,
-        threshold_elite: u64,
-        cost_repair_start: u64,
-        cost_repair_end: u64,
-        cost_accum_end: u64,
-        cost_elite_end: u64,
-        decay_grace_period: u64
-    ) acquires BioCreditConfig {
-        assert!(signer::address_of(admin) == @protocol_75, E_NOT_ADMIN);
-        let config = borrow_global_mut<BioCreditConfig>(@protocol_75);
-
-        let curve =
-            bio_math::new_curve_params(
-                threshold_repair,
-                threshold_elite,
-                cost_repair_start,
-                cost_repair_end,
-                cost_accum_end,
-                cost_elite_end
-            );
-
-        config.curve = curve;
-        config.decay_grace_period = decay_grace_period;
-    }
-
-    // 公开接口 (Public Entries) ----------------------------------------
+    // 用户接口 (User Entries) ----------------------------------------
 
     /// 用户注册 (Register User) 并初始化 BioSoul
     ///
@@ -212,7 +152,8 @@ module protocol_75::bio_credit {
     /// @param device_hash: 设备指纹哈希
     public entry fun register_user(user: &signer, device_hash: vector<u8>) {
         let user_addr = signer::address_of(user);
-        // 若用户已注册，则报错
+
+        // 不允许重复注册
         assert!(!exists<BioSoul>(user_addr), E_ALREADY_REGISTERED);
 
         // 创建 BioSoul 资源
@@ -248,7 +189,7 @@ module protocol_75::bio_credit {
     /// 算分逻辑由 challenge_manager 在确认合规后调用 `update_score_and_streak`。
     ///
     /// @param user: 用户地址
-    /// @param date_key: 日期键 e.g. "2023-10-01"
+    /// @param date_key: 日期键 e.g. "2026-02-12"
     /// @param task_status: 任务状态
     /// @param timestamp: 时间戳
     /// @param signature_hash: 签名哈希
@@ -283,19 +224,19 @@ module protocol_75::bio_credit {
     /// @param user: 用户地址
     /// @param is_compliant: 是否合规
     /// @param difficulty: 任务组合的综合难度系数 (由 task_market 计算)
-    /// @param daily_checkin_count: 本次“每日打卡”的次数 (通常为 1, 但支持批量)
+    /// @param daily_checkin_count: 累积的“每日打卡”的次数 (通常为1，但支持批量)
     public(friend) fun update_score_and_streak(
         user: address,
         is_compliant: bool,
         difficulty: u64,
         daily_checkin_count: u64
-    ) acquires BioCreditConfig, BioSoul, Events {
+    ) acquires BioSoul, Events {
         // 若用户未注册，则报错
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
-        let config = borrow_global<BioCreditConfig>(@protocol_75);
 
         // 先应用懒惰衰减 (Decay)
-        apply_lazy_decay(user, config);
+        let params = get_curve_params();
+        apply_lazy_decay(user, &params);
 
         let bio_soul = borrow_global_mut<BioSoul>(user);
         let old_score = bio_soul.score;
@@ -313,7 +254,7 @@ module protocol_75::bio_credit {
             // 加分积分计算：根据 cost 曲线消耗能量
             let new_score =
                 bio_math::integrate_energy_to_score(
-                    bio_soul.score, energy_gain, &config.curve
+                    bio_soul.score, energy_gain, &params, DECIMALS
                 );
             bio_soul.score = math64::min(new_score, CREDIT_MAX);
 
@@ -324,7 +265,6 @@ module protocol_75::bio_credit {
 
             // 发出奖励事件
             emit_score_event(user, old_score, bio_soul.score, EVENT_REWARD);
-
         }
         // 如果违规
         else {
@@ -337,14 +277,12 @@ module protocol_75::bio_credit {
             // Energy = Difficulty * Count * Factor
             let energy_base = difficulty * daily_checkin_count * ENERGY_SCALING_FACTOR;
 
-            let current_cost = bio_math::calculate_cost_at(
-                bio_soul.score, &config.curve
-            );
+            let current_cost = bio_math::calculate_cost_at(bio_soul.score, &params);
 
             // 扣分计算 (Slash)
             // 扣分 = 能量基数 * 瞬时成本 / 精度
             // 高分段 Cost 高 -> 扣分更多 (High Risk)
-            let score_loss = (energy_base * current_cost) / SCALING_FACTOR;
+            let score_loss = (energy_base * current_cost) / DECIMALS;
 
             if (bio_soul.score > CREDIT_MIN + score_loss) {
                 bio_soul.score -= score_loss;
@@ -373,33 +311,59 @@ module protocol_75::bio_credit {
         bio_soul.badges.push_back(badge);
     }
 
+    // 内部辅助函数 (Internal Helpers) ----------------------------------
+
+    /// 获取数学库计算所需的曲线参数
+    fun get_curve_params(): bio_math::EnergyCurveParams {
+        bio_math::new_curve_params(
+            CREDIT_MIN,
+            CREDIT_MAX,
+            CREDIT_INIT,
+            CREDIT_ELITE,
+            COST_REPAIR_START,
+            COST_REPAIR_END,
+            COST_ACCUM_END,
+            COST_ELITE_END
+        )
+    }
+
     // 私有方法 (Private Methods) ---------------------------------------
 
     /// 应用懒惰衰减 (Apply Lazy Decay)
     ///
     /// @param user: 用户地址
     /// @param config: 配置文件
-    fun apply_lazy_decay(user: address, config: &BioCreditConfig) acquires BioSoul, Events {
+    /// @param user: 用户地址
+    /// 应用懒惰衰减 (Apply Lazy Decay)
+    ///
+    /// @param user: 用户地址
+    /// @param params: 曲线参数
+    fun apply_lazy_decay(
+        user: address, params: &bio_math::EnergyCurveParams
+    ) acquires BioSoul, Events {
         let bio_soul = borrow_global_mut<BioSoul>(user);
-        let now = timestamp::now_seconds();
         let old_score = bio_soul.score;
+        let now = timestamp::now_seconds();
 
         let new_score =
             bio_math::calculate_decayed_score(
                 old_score,
                 bio_soul.last_update_time,
                 now,
-                config.decay_grace_period,
-                &config.curve
+                params,
+                DECAY_GRACE_PERIOD,
+                ENERGY_DECAY_BASE,
+                DECIMALS
             );
 
+        // 如果分数发生变化，则更新并发出事件
         if (new_score != old_score) {
             bio_soul.score = new_score;
             emit_score_event(user, old_score, new_score, EVENT_DECAY);
         }
 
-        // 注意：此处不更新 last_update_time
-        // 把它留给后续的 update_score_and_streak 统一更新到 now
+        // 如果分数没有发生变化，则不更新
+        // last_update_time 的更新留给后续的 update_score_and_streak 统一更新到 now
     }
 
     /// 发出分数变化事件 (Emit Score Event)
@@ -442,14 +406,14 @@ module protocol_75::bio_credit {
         is_compliant: bool,
         difficulty: u64,
         daily_checkin_count: u64
-    ): (u64, u64) acquires BioCreditConfig, BioSoul {
-        if (!exists<BioSoul>(user) || !exists<BioCreditConfig>(@protocol_75)) {
+    ): (u64, u64) acquires BioSoul {
+        if (!exists<BioSoul>(user)) {
             return (0, 0)
         };
 
         let bio_soul = borrow_global<BioSoul>(user);
-        let config = borrow_global<BioCreditConfig>(@protocol_75);
         let now = timestamp::now_seconds();
+        let params = get_curve_params();
 
         // 1. 模拟衰减
         let score_after_decay =
@@ -457,8 +421,10 @@ module protocol_75::bio_credit {
                 bio_soul.score,
                 bio_soul.last_update_time,
                 now,
-                config.decay_grace_period,
-                &config.curve
+                &params,
+                DECAY_GRACE_PERIOD,
+                ENERGY_DECAY_BASE,
+                DECIMALS
             );
 
         // 2. 模拟结算
@@ -471,16 +437,20 @@ module protocol_75::bio_credit {
                 // 加分积分
                 let integrated_score =
                     bio_math::integrate_energy_to_score(
-                        score_after_decay, energy_gain, &config.curve
+                        score_after_decay,
+                        energy_gain,
+                        &params,
+                        DECIMALS
                     );
                 math64::min(integrated_score, CREDIT_MAX)
             } else {
                 // 扣分倍率
                 let energy_base = difficulty * daily_checkin_count
                     * ENERGY_SCALING_FACTOR;
-                let current_cost =
-                    bio_math::calculate_cost_at(score_after_decay, &config.curve);
-                let score_loss = (energy_base * current_cost) / SCALING_FACTOR;
+                let current_cost = bio_math::calculate_cost_at(
+                    score_after_decay, &params
+                );
+                let score_loss = (energy_base * current_cost) / DECIMALS;
                 if (score_after_decay > CREDIT_MIN + score_loss) {
                     score_after_decay - score_loss
                 } else {
@@ -517,28 +487,24 @@ module protocol_75::bio_credit {
     ///
     /// @param user: 用户地址
     /// @return u64: 用户实时有效分数
-    public fun get_effective_score(user: address): u64 acquires BioCreditConfig, BioSoul {
+    public fun get_effective_score(user: address): u64 acquires BioSoul {
         if (!exists<BioSoul>(user)) {
             return 0
         };
 
         let bio_soul = borrow_global<BioSoul>(user);
-
-        // 如果配置不存在，直接返回当前分数 (避免 panic)
-        if (!exists<BioCreditConfig>(@protocol_75)) {
-            return bio_soul.score
-        };
-
-        let config = borrow_global<BioCreditConfig>(@protocol_75);
         let now = timestamp::now_seconds();
+        let params = get_curve_params();
 
         // 使用公共逻辑计算
         bio_math::calculate_decayed_score(
             bio_soul.score,
             bio_soul.last_update_time,
             now,
-            config.decay_grace_period,
-            &config.curve
+            &params,
+            DECAY_GRACE_PERIOD,
+            ENERGY_DECAY_BASE,
+            DECIMALS
         )
     }
 

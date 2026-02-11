@@ -84,7 +84,7 @@ module protocol_75::asset_manager {
         reporter: address
     }
 
-    // 公开接口 (Public Entries) ----------------------------------------
+    // 用户接口 (User Entries) ----------------------------------------
 
     /// 逃生舱强制提款 (Emergency Withdraw)
     ///

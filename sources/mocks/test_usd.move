@@ -30,7 +30,7 @@ module protocol_75::test_usd {
         mint: MintCapability<TestUSD>
     }
 
-    // 公开接口 (Public Entries) ----------------------------------------
+    // 用户接口 (User Entries) ----------------------------------------
 
     /// 初始化代币 (Initialize)
     ///
