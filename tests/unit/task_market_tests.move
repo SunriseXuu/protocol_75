@@ -10,14 +10,14 @@ module protocol_75::task_market_tests {
     #[test_only]
     use protocol_75::task_market::{Self, TaskAtom};
 
-    // 常数部分直接照搬，而不封装 for_test
-
+    // 错误码 (Error Codes) 直接照搬
     const E_NOT_ADMIN: u64 = 1;
     const E_INVALID_TASK_ID: u64 = 2;
     const E_INVALID_TASK_GOAL: u64 = 3;
     const E_INVALID_TASK_EDGES: u64 = 4;
     const E_TASK_DISABLED: u64 = 5;
-    
+
+    // 常量 (Constants) 直接照搬
     const TASK_CALORIES_BURNED: u8 = 1;
     const TASK_EXERCISE_DURATION: u8 = 2;
     const TASK_SLEEP_DURATION: u8 = 3;
@@ -36,11 +36,11 @@ module protocol_75::task_market_tests {
         // 准备任务原子
         let task_atoms = vector::empty<TaskAtom>();
         // 卡路里 300 > 200 (Min), 锻炼 30 >= 30 (Min) -> 合法
-        task_atoms.push_back(task_market::new_task_atom_for_test(TASK_CALORIES_BURNED, 300));
-        task_atoms.push_back(task_market::new_task_atom_for_test(TASK_EXERCISE_DURATION, 30));
+        task_atoms.push_back(task_market::new_task_atom(TASK_CALORIES_BURNED, 300));
+        task_atoms.push_back(task_market::new_task_atom(TASK_EXERCISE_DURATION, 30));
 
         // 计算：(1 * 300) + (10 * 30) = 300 + 300 = 600
-        let difficulty = task_market::calculate_difficulty_for_test(&task_atoms);
+        let difficulty = task_market::calculate_difficulty(&task_atoms);
         assert!(difficulty == 600, 0);
     }
 
@@ -60,10 +60,10 @@ module protocol_75::task_market_tests {
         task_market::init_module_for_test(admin);
 
         // 测试非法参数：消耗 0 kcal (小于配置下限)
-        let task_atoms = vector::singleton<TaskAtom>(task_market::new_task_atom_for_test(1, 0));
+        let task_atoms = vector::singleton<TaskAtom>(task_market::new_task_atom(1, 0));
 
         // 预期报错
-        task_market::calculate_difficulty_for_test(&task_atoms);
+        task_market::calculate_difficulty(&task_atoms);
     }
 
     #[test(admin = @protocol_75)]
@@ -80,9 +80,9 @@ module protocol_75::task_market_tests {
 
         // 睡眠 480 (一开始在 420-540 之间) -> 合法
         let task_atoms = vector::singleton<TaskAtom>(
-            task_market::new_task_atom_for_test(TASK_SLEEP_DURATION, 480)
+            task_market::new_task_atom(TASK_SLEEP_DURATION, 480)
         );
-        assert!(task_market::calculate_difficulty_for_test(&task_atoms) == 480, 0);
+        assert!(task_market::calculate_difficulty(&task_atoms) == 480, 0);
 
         // 修改任务原子配置
         task_market::upsert_task_pool(
@@ -94,12 +94,12 @@ module protocol_75::task_market_tests {
             800, // 新的上限
             true
         );
-        assert!(task_market::calculate_difficulty_for_test(&task_atoms) == 960, 1);
+        assert!(task_market::calculate_difficulty(&task_atoms) == 960, 1);
 
         // 新增任务原子，权重 25，上下限 10-30
         task_market::upsert_task_pool(admin, 5, b"Walk Steps", 25, 10, 30, true);
-        let task_atoms = vector::singleton<TaskAtom>(task_market::new_task_atom_for_test(5, 20));
-        assert!(task_market::calculate_difficulty_for_test(&task_atoms) == 500, 2);
+        let task_atoms = vector::singleton<TaskAtom>(task_market::new_task_atom(5, 20));
+        assert!(task_market::calculate_difficulty(&task_atoms) == 500, 2);
     }
 
     #[test(admin = @protocol_75, user = @0x123)]
@@ -147,7 +147,7 @@ module protocol_75::task_market_tests {
         );
 
         // 尝试创建该类型的任务原子 -> 预期失败
-        task_market::new_task_atom_for_test(TASK_CALORIES_BURNED, 500);
+        task_market::new_task_atom(TASK_CALORIES_BURNED, 500);
     }
 
     #[test(admin = @protocol_75)]
@@ -160,7 +160,7 @@ module protocol_75::task_market_tests {
         task_market::init_module_for_test(admin);
 
         // ID 99 不存在 -> 预期失败
-        task_market::new_task_atom_for_test(99, 100);
+        task_market::new_task_atom(99, 100);
     }
 
     #[test(admin = @protocol_75)]
@@ -177,11 +177,11 @@ module protocol_75::task_market_tests {
         task_market::init_module_for_test(admin);
 
         // 创建合法的 Atom: Goal=300 (当前 Min=200)
-        let atom = task_market::new_task_atom_for_test(TASK_CALORIES_BURNED, 300);
+        let atom = task_market::new_task_atom(TASK_CALORIES_BURNED, 300);
         let task_atoms = vector::singleton(atom);
 
         // 此时计算应该是成功的
-        assert!(task_market::calculate_difficulty_for_test(&task_atoms) == 300, 0);
+        assert!(task_market::calculate_difficulty(&task_atoms) == 300, 0);
 
         // 管理员更新配置，将 Min 提高到 400
         task_market::upsert_task_pool(
@@ -195,7 +195,7 @@ module protocol_75::task_market_tests {
         );
 
         // 4. 再次计算 -> Double Check 应发现 Goal(300) < Min(400) -> 预期失败
-        task_market::calculate_difficulty_for_test(&task_atoms);
+        task_market::calculate_difficulty(&task_atoms);
     }
 }
 

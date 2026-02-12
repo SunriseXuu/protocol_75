@@ -114,9 +114,10 @@ module protocol_75::bio_credit {
     /// @param device_hash: 设备指纹哈希
     public entry fun register_user(user: &signer, device_hash: vector<u8>) {
         let user_addr = signer::address_of(user);
-
         // 不允许重复注册
         assert!(!exists<BioSoul>(user_addr), E_ALREADY_REGISTERED);
+
+        // TODO: 要求 0.75u 的门槛以防止女巫攻击
 
         // 创建 BioSoul 资源
         move_to(
@@ -407,37 +408,6 @@ module protocol_75::bio_credit {
     // 单元测试 (Unit Tests) --------------------------------------------
 
     #[test_only]
-    /// 为单元测试封装的 record_daily_checkin
-    public fun record_daily_checkin_for_test(
-        user: address,
-        date_key: String,
-        is_goal_achieved: bool,
-        timestamp: u64,
-        signature_hash: vector<u8>
-    ) acquires BioSoul {
-        record_daily_checkin(
-            user,
-            date_key,
-            is_goal_achieved,
-            timestamp,
-            signature_hash
-        )
-    }
-
-    #[test_only]
-    /// 为单元测试封装的 update_score_and_streak
-    public fun update_score_and_streak_for_test(
-        user: address,
-        is_task_achieved: bool,
-        difficulty: u64,
-        achieved_goal_count: u64
-    ) acquires BioSoul {
-        update_score_and_streak(
-            user,
-            is_task_achieved,
-            difficulty,
-            achieved_goal_count
-        )
-    }
+    friend protocol_75::bio_credit_tests;
 }
 

@@ -10,7 +10,7 @@ protocol_75 = "0x3b81cb01dd1e9eb5b7f28c0474c7def2de3a9e54bfc96c4f682a7087daefd32
 
 [dependencies.AptosFramework]
 git = "https://github.com/aptos-labs/aptos-framework.git"
-rev = "testnet"
+rev = "mainnet"
 subdir = "aptos-framework"
 
 [dev-dependencies]

@@ -44,7 +44,7 @@ module protocol_75::test_usd {
                 string::utf8(b"Test USD"), // 代币名称
                 string::utf8(b"AUDT"), // 代币符号
                 6, // 精度 (6位小数)
-                false //以前是 true，为解决 Fungible Asset 元数据兼容性问题改为 false
+                false // 以前是 true，为解决 Fungible Asset 元数据兼容性问题改为 false
             );
         move_to(admin, Caps { burn, freeze, mint });
     }

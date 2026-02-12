@@ -306,23 +306,12 @@ module protocol_75::task_market {
     // 单元测试 (Unit Tests) --------------------------------------------
 
     #[test_only]
+    friend protocol_75::task_market_tests;
+
+    #[test_only]
     /// 为单元测试封装的 init_module
     public fun init_module_for_test(admin: &signer) {
         init_module(admin);
-    }
-
-    #[test_only]
-    /// 为单元测试封装的 new_task_atom
-    public fun new_task_atom_for_test(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
-        new_task_atom(task_id, goal)
-    }
-
-    #[test_only]
-    /// 为单元测试封装的 calculate_difficulty
-    public fun calculate_difficulty_for_test(
-        task_atoms: &vector<TaskAtom>
-    ): u64 acquires TaskPool {
-        calculate_difficulty(task_atoms)
     }
 }
 

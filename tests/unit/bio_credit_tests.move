@@ -36,7 +36,7 @@ module protocol_75::bio_credit_tests {
         let initial_score = bio_math::get_credit_init();
 
         // Simulate task: Difficulty 500, Count 1
-        bio_credit::update_score_and_streak_for_test(user_addr, true, 500, 1);
+        bio_credit::update_score_and_streak(user_addr, true, 500, 1);
 
         let new_score = bio_credit::get_score(user_addr);
         assert!(new_score > initial_score, 1);
@@ -51,7 +51,7 @@ module protocol_75::bio_credit_tests {
         let initial_score = bio_math::get_credit_init();
 
         // Simulate failure
-        bio_credit::update_score_and_streak_for_test(user_addr, false, 500, 1);
+        bio_credit::update_score_and_streak(user_addr, false, 500, 1);
 
         let new_score = bio_credit::get_score(user_addr);
         assert!(new_score < initial_score, 1);
@@ -65,7 +65,7 @@ module protocol_75::bio_credit_tests {
         let user_addr = signer::address_of(user);
 
         let date = string::utf8(b"2026-02-13");
-        bio_credit::record_daily_checkin_for_test(
+        bio_credit::record_daily_checkin(
             user_addr,
             date,
             true,
