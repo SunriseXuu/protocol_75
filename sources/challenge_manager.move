@@ -44,14 +44,14 @@ module protocol_75::challenge_manager {
     /// user: 发起人
     /// task_ids: 任务 ID 列表
     /// task_params: 任务参数列表
-    /// daily_checkin_min: “每日打卡”次数下限
+    /// achieved_goal_min: 达成目标的次数下限
     /// challenge_hash: 挑战哈希
     /// stake_amount: 质押金额
     public entry fun create_challenge(
         user: &signer,
         task_ids: vector<u8>,
         task_params: vector<u64>,
-        daily_checkin_min: u64,
+        achieved_goal_min: u64,
         challenge_hash: vector<u8>,
         stake_amount: u64
     ) {
@@ -66,7 +66,7 @@ module protocol_75::challenge_manager {
             tasks.push_back(task);
             i += 1;
         };
-        task_market::new_task_combo(tasks, daily_checkin_min);
+        task_market::new_task_combo(tasks, achieved_goal_min);
 
         // 1. 提取资金 (从用户钱包取钱)交给 Asset Manager 处理
         // Asset Manager 内部会调用 coin::withdraw
@@ -146,7 +146,10 @@ module protocol_75::challenge_manager {
             // Passing difficulty and daily_checkin_count (from args)
             let daily_checkin_cnt = daily_checkin_counts[i];
             bio_credit::update_score_and_streak(
-                user_addr, is_success, difficulty, daily_checkin_cnt
+                user_addr,
+                is_success,
+                difficulty,
+                daily_checkin_cnt
             );
 
             // 3. 尝试发奖 (如果连胜 > 3)

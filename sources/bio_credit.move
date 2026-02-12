@@ -50,44 +50,6 @@ module protocol_75::bio_credit {
 
     // 数值常量 (Constants) ---------------------------------------------
 
-    /// 精度 (Decimals)
-    const DECIMALS: u64 = 1_000_000;
-
-    /// 最小信用分
-    const CREDIT_MIN: u64 = 35_000_000;
-    /// 初始信用分
-    const CREDIT_INIT: u64 = 50_000_000;
-    /// 精英信用分
-    const CREDIT_ELITE: u64 = 75_000_000;
-    /// 最大信用分
-    const CREDIT_MAX: u64 = 95_000_000;
-
-    /// 成本: 修复期起点 (1.0)
-    const COST_REPAIR_START: u64 = 1_000_000;
-    /// 成本: 修复期终点 (1.25)
-    const COST_REPAIR_END: u64 = 1_250_000;
-    /// 成本: 积累期终点 (3.0)
-    const COST_ACCUM_END: u64 = 3_000_000;
-    /// 成本: 精英期终点 (10.0)
-    const COST_ELITE_END: u64 = 10_000_000;
-
-    /// 能量放大系数
-    /// 用于将任务难度系数 (Difficulty) 转换为链上能量值。
-    /// 计算逻辑：
-    /// - 设计为 50 -> 75 分 需要大约 6个月 (180天)
-    /// - 计算出总能量需求: ~52.5M
-    /// - 计算出每日能量需求: ~300k
-    /// - 假设平均每日任务难度: 500
-    /// - 所以放大系数 = 300,000 / 500 = 600
-    const ENERGY_SCALING_FACTOR: u64 = 600;
-    /// 能量衰减基数
-    /// 计算逻辑：
-    /// - 一日练，四日功，由于每日能量需求: ~300k
-    /// - 所以设计为上述每日能量需求的 1/4 = 75,000
-    const ENERGY_DECAY_BASE: u64 = 75_000;
-    /// 衰减豁免期 (48小时)
-    const DECAY_GRACE_PERIOD: u64 = 172800;
-
     /// 奖励事件
     const EVENT_REWARD: u8 = 1;
     /// 惩罚事件
@@ -99,8 +61,8 @@ module protocol_75::bio_credit {
 
     /// 用户每日行为数据 (轻量级结构)
     struct DailyData has store, drop {
-        /// 任务完成情况
-        task_status: bool,
+        /// 目标是否达成
+        is_goal_achieved: bool,
         /// 时间戳
         timestamp: u64,
         /// 签名哈希
@@ -121,7 +83,7 @@ module protocol_75::bio_credit {
         device_hash: vector<u8>,
         /// 获得的勋章列表
         badges: vector<Object<AchievementBadge>>,
-        /// “每日打卡”日志 (Key: YYYY-MM-DD)
+        /// 每日打卡日志 (Key: YYYY-MM-DD)
         daily_checkin_log: Table<String, DailyData>
     }
 
@@ -144,7 +106,7 @@ module protocol_75::bio_credit {
         score_events: event::EventHandle<ScoreUpdateEvent>
     }
 
-    // 用户接口 (User Entries) ----------------------------------------
+    // 用户接口 (User Entries) ------------------------------------------
 
     /// 用户注册 (Register User) 并初始化 BioSoul
     ///
@@ -160,8 +122,8 @@ module protocol_75::bio_credit {
         move_to(
             user,
             BioSoul {
-                score: CREDIT_INIT,
-                highest_score: CREDIT_INIT,
+                score: bio_math::get_credit_init(),
+                highest_score: bio_math::get_credit_init(),
                 personal_streak: 0,
                 last_update_time: timestamp::now_seconds(),
                 device_hash,
@@ -190,13 +152,13 @@ module protocol_75::bio_credit {
     ///
     /// @param user: 用户地址
     /// @param date_key: 日期键 e.g. "2026-02-12"
-    /// @param task_status: 任务状态
+    /// @param is_goal_achieved: 目标是否达成
     /// @param timestamp: 时间戳
     /// @param signature_hash: 签名哈希
     public(friend) fun record_daily_checkin(
         user: address,
         date_key: String,
-        task_status: bool,
+        is_goal_achieved: bool,
         timestamp: u64,
         signature_hash: vector<u8>
     ) acquires BioSoul {
@@ -204,7 +166,7 @@ module protocol_75::bio_credit {
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
 
         let bio_soul = borrow_global_mut<BioSoul>(user);
-        let daily_data = DailyData { task_status, timestamp, signature_hash };
+        let daily_data = DailyData { is_goal_achieved, timestamp, signature_hash };
 
         // 若用户已打卡，则更新
         if (bio_soul.daily_checkin_log.contains(date_key)) {
@@ -222,41 +184,47 @@ module protocol_75::bio_credit {
     /// 包含核心的“能量成本积分”逻辑
     ///
     /// @param user: 用户地址
-    /// @param is_compliant: 是否合规
-    /// @param difficulty: 任务组合的综合难度系数 (由 task_market 计算)
-    /// @param daily_checkin_count: 累积的“每日打卡”的次数 (通常为1，但支持批量)
+    /// @param is_task_achieved: 任务是否达成
+    /// @param difficulty: 任务组合的综合难度系数
+    /// @param achieved_goal_count: 累积的达成目标次数
     public(friend) fun update_score_and_streak(
         user: address,
-        is_compliant: bool,
+        is_task_achieved: bool,
         difficulty: u64,
-        daily_checkin_count: u64
+        achieved_goal_count: u64
     ) acquires BioSoul, Events {
         // 若用户未注册，则报错
         assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
 
-        // 先应用懒惰衰减 (Decay)
-        let params = get_curve_params();
-        apply_lazy_decay(user, &params);
-
         let bio_soul = borrow_global_mut<BioSoul>(user);
         let old_score = bio_soul.score;
 
-        // 如果合规
-        if (is_compliant) {
+        // 先应用衰减
+        let new_score =
+            bio_math::calculate_decayed_score(
+                old_score,
+                bio_soul.last_update_time,
+                timestamp::now_seconds()
+            );
+        // 如果分数发生变化，则更新并发出事件
+        if (new_score != old_score) {
+            bio_soul.score = new_score;
+            emit_score_event(user, old_score, new_score, EVENT_DECAY);
+        };
+
+        // 如果任务达成
+        if (is_task_achieved) {
             // 增加连胜
             bio_soul.personal_streak += 1;
 
-            // 计算本次“每日打卡”产生的总能量 (Total Energy)
-            // 公式: Energy = Difficulty * Count * Factor
-            // 例如: 500 * 1 * 600 = 300,000
-            let energy_gain = difficulty * daily_checkin_count * ENERGY_SCALING_FACTOR;
+            // 计算本次达成目标产生的总能量
+            let energy_gain =
+                bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
 
             // 加分积分计算：根据 cost 曲线消耗能量
             let new_score =
-                bio_math::integrate_energy_to_score(
-                    bio_soul.score, energy_gain, &params, DECIMALS
-                );
-            bio_soul.score = math64::min(new_score, CREDIT_MAX);
+                bio_math::integrate_energy_to_score(bio_soul.score, energy_gain);
+            bio_soul.score = math64::min(new_score, bio_math::get_credit_max());
 
             // 更新最高分记录
             if (bio_soul.score > bio_soul.highest_score) {
@@ -266,29 +234,21 @@ module protocol_75::bio_credit {
             // 发出奖励事件
             emit_score_event(user, old_score, bio_soul.score, EVENT_REWARD);
         }
-        // 如果违规
+        // 如果任务失败
         else {
             // 清零连胜
             bio_soul.personal_streak = 0;
 
             // 计算原本应得的能量 (作为惩罚基数)
-            // 对称性原则: 假如你完成了这个难度的任务，你能得多少能量，
-            // 现在你失败了，我们就用这个能量值乘以当前的 Cost 来扣分。
-            // Energy = Difficulty * Count * Factor
-            let energy_base = difficulty * daily_checkin_count * ENERGY_SCALING_FACTOR;
+            // 对称性原则: 假如你完成了这个难度的任务，你能得多少能量
+            // 现在你失败了，我们就用这个能量值反向积分扣除
+            let energy_base =
+                bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
 
-            let current_cost = bio_math::calculate_cost_at(bio_soul.score, &params);
-
-            // 扣分计算 (Slash)
-            // 扣分 = 能量基数 * 瞬时成本 / 精度
-            // 高分段 Cost 高 -> 扣分更多 (High Risk)
-            let score_loss = (energy_base * current_cost) / DECIMALS;
-
-            if (bio_soul.score > CREDIT_MIN + score_loss) {
-                bio_soul.score -= score_loss;
-            } else {
-                bio_soul.score = CREDIT_MIN;
-            };
+            // 扣分计算 (Slash) - 使用积分逻辑
+            bio_soul.score = bio_math::calculate_slashed_score(
+                bio_soul.score, energy_base
+            );
 
             // 发出惩罚事件
             emit_score_event(user, old_score, bio_soul.score, EVENT_SLASH);
@@ -311,60 +271,7 @@ module protocol_75::bio_credit {
         bio_soul.badges.push_back(badge);
     }
 
-    // 内部辅助函数 (Internal Helpers) ----------------------------------
-
-    /// 获取数学库计算所需的曲线参数
-    fun get_curve_params(): bio_math::EnergyCurveParams {
-        bio_math::new_curve_params(
-            CREDIT_MIN,
-            CREDIT_MAX,
-            CREDIT_INIT,
-            CREDIT_ELITE,
-            COST_REPAIR_START,
-            COST_REPAIR_END,
-            COST_ACCUM_END,
-            COST_ELITE_END
-        )
-    }
-
     // 私有方法 (Private Methods) ---------------------------------------
-
-    /// 应用懒惰衰减 (Apply Lazy Decay)
-    ///
-    /// @param user: 用户地址
-    /// @param config: 配置文件
-    /// @param user: 用户地址
-    /// 应用懒惰衰减 (Apply Lazy Decay)
-    ///
-    /// @param user: 用户地址
-    /// @param params: 曲线参数
-    fun apply_lazy_decay(
-        user: address, params: &bio_math::EnergyCurveParams
-    ) acquires BioSoul, Events {
-        let bio_soul = borrow_global_mut<BioSoul>(user);
-        let old_score = bio_soul.score;
-        let now = timestamp::now_seconds();
-
-        let new_score =
-            bio_math::calculate_decayed_score(
-                old_score,
-                bio_soul.last_update_time,
-                now,
-                params,
-                DECAY_GRACE_PERIOD,
-                ENERGY_DECAY_BASE,
-                DECIMALS
-            );
-
-        // 如果分数发生变化，则更新并发出事件
-        if (new_score != old_score) {
-            bio_soul.score = new_score;
-            emit_score_event(user, old_score, new_score, EVENT_DECAY);
-        }
-
-        // 如果分数没有发生变化，则不更新
-        // last_update_time 的更新留给后续的 update_score_and_streak 统一更新到 now
-    }
 
     /// 发出分数变化事件 (Emit Score Event)
     ///
@@ -397,65 +304,47 @@ module protocol_75::bio_credit {
     /// 模拟“衰减 + 结算”，不改变状态
     ///
     /// @param user: 用户地址
-    /// @param is_compliant: 假设任务是否合规
+    /// @param is_task_achieved: 假设任务是否合规
     /// @param difficulty: 任务难度
-    /// @param daily_checkin_count: “每日打卡”的次数
+    /// @param achieved_goal_count: 达成目标次数
     /// @return: (预计分数, 分数变化量)
     public fun preview_reward(
         user: address,
-        is_compliant: bool,
+        is_task_achieved: bool,
         difficulty: u64,
-        daily_checkin_count: u64
+        achieved_goal_count: u64
     ): (u64, u64) acquires BioSoul {
         if (!exists<BioSoul>(user)) {
             return (0, 0)
         };
 
         let bio_soul = borrow_global<BioSoul>(user);
-        let now = timestamp::now_seconds();
-        let params = get_curve_params();
 
         // 1. 模拟衰减
         let score_after_decay =
             bio_math::calculate_decayed_score(
                 bio_soul.score,
                 bio_soul.last_update_time,
-                now,
-                &params,
-                DECAY_GRACE_PERIOD,
-                ENERGY_DECAY_BASE,
-                DECIMALS
+                timestamp::now_seconds()
             );
 
         // 2. 模拟结算
         let final_score =
-            if (is_compliant) {
+            if (is_task_achieved) {
                 // 计算能量
-                let energy_gain = difficulty * daily_checkin_count
-                    * ENERGY_SCALING_FACTOR;
+                let energy_gain =
+                    bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
 
                 // 加分积分
                 let integrated_score =
-                    bio_math::integrate_energy_to_score(
-                        score_after_decay,
-                        energy_gain,
-                        &params,
-                        DECIMALS
-                    );
-                math64::min(integrated_score, CREDIT_MAX)
+                    bio_math::integrate_energy_to_score(score_after_decay, energy_gain);
+                math64::min(integrated_score, bio_math::get_credit_max())
             } else {
                 // 扣分倍率
-                let energy_base = difficulty * daily_checkin_count
-                    * ENERGY_SCALING_FACTOR;
-                let current_cost = bio_math::calculate_cost_at(
-                    score_after_decay, &params
-                );
-                let score_loss = (energy_base * current_cost) / DECIMALS;
-                if (score_after_decay > CREDIT_MIN + score_loss) {
-                    score_after_decay - score_loss
-                } else {
-                    CREDIT_MIN
-                }
+                let energy_base =
+                    bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
+
+                bio_math::calculate_slashed_score(score_after_decay, energy_base)
             };
 
         let delta =
@@ -493,18 +382,12 @@ module protocol_75::bio_credit {
         };
 
         let bio_soul = borrow_global<BioSoul>(user);
-        let now = timestamp::now_seconds();
-        let params = get_curve_params();
 
         // 使用公共逻辑计算
         bio_math::calculate_decayed_score(
             bio_soul.score,
             bio_soul.last_update_time,
-            now,
-            &params,
-            DECAY_GRACE_PERIOD,
-            ENERGY_DECAY_BASE,
-            DECIMALS
+            timestamp::now_seconds()
         )
     }
 
@@ -519,6 +402,134 @@ module protocol_75::bio_credit {
         };
 
         borrow_global<BioSoul>(user).personal_streak
+    }
+
+    // 单元测试 (Unit Tests) --------------------------------------------
+
+    #[test_only]
+    public fun update_score_for_test(
+        user: address,
+        is_task_achieved: bool,
+        difficulty: u64,
+        achieved_goal_count: u64
+    ) acquires BioSoul, Events {
+        update_score_and_streak(
+            user,
+            is_task_achieved,
+            difficulty,
+            achieved_goal_count
+        );
+    }
+
+    #[test_only]
+    public fun record_checkin_for_test(
+        user: address,
+        date_key: String,
+        is_goal_achieved: bool,
+        timestamp: u64,
+        signature_hash: vector<u8>
+    ) acquires BioSoul {
+        record_daily_checkin(
+            user,
+            date_key,
+            is_goal_achieved,
+            timestamp,
+            signature_hash
+        );
+    }
+}
+
+#[test_only]
+module protocol_75::bio_credit_tests {
+    use std::signer;
+    use std::string;
+    use aptos_framework::account;
+    use aptos_framework::timestamp;
+
+    use protocol_75::bio_credit;
+    use protocol_75::bio_math;
+
+    fun setup_test(user: &signer) {
+        let addr = signer::address_of(user);
+        if (!account::exists_at(addr)) {
+            account::create_account_for_test(addr);
+        };
+        // Timestamp needs @0x1
+        let framework = account::create_signer_for_test(@0x1);
+        timestamp::set_time_has_started_for_testing(&framework);
+    }
+
+    fun advance_time(seconds: u64) {
+        timestamp::update_global_time_for_test_secs(timestamp::now_seconds() + seconds);
+    }
+
+    #[test(user = @0x123)]
+    fun test_register_success(user: &signer) {
+        setup_test(user);
+        let device_hash = b"device_fingerprint";
+        bio_credit::register_user(user, device_hash);
+
+        let user_addr = signer::address_of(user);
+        // Direct access to bio_math friend functions is not allowed here unless public.
+        // We will assert against hardcoded expected values or update bio_math.
+        // For now, let's assume bio_math update comes next.
+        assert!(bio_credit::get_score(user_addr) == bio_math::get_credit_init(), 1);
+        assert!(bio_credit::get_personal_streak(user_addr) == 0, 2);
+    }
+
+    #[test(user = @0x123)]
+    #[expected_failure(abort_code = bio_credit::E_ALREADY_REGISTERED)]
+    fun test_register_twice(user: &signer) {
+        setup_test(user);
+        let device_hash = b"device_fingerprint";
+        bio_credit::register_user(user, device_hash);
+        bio_credit::register_user(user, device_hash);
+    }
+
+    #[test(user = @0x123)]
+    fun test_score_reward(user: &signer) {
+        setup_test(user);
+        bio_credit::register_user(user, b"device");
+        let user_addr = signer::address_of(user);
+        let initial_score = bio_math::get_credit_init();
+
+        // Simulate task: Difficulty 500, Count 1
+        bio_credit::update_score_for_test(user_addr, true, 500, 1);
+
+        let new_score = bio_credit::get_score(user_addr);
+        assert!(new_score > initial_score, 1);
+        assert!(bio_credit::get_personal_streak(user_addr) == 1, 2);
+    }
+
+    #[test(user = @0x123)]
+    fun test_score_slash(user: &signer) {
+        setup_test(user);
+        bio_credit::register_user(user, b"device");
+        let user_addr = signer::address_of(user);
+        let initial_score = bio_math::get_credit_init();
+
+        // Simulate failure
+        bio_credit::update_score_for_test(user_addr, false, 500, 1);
+
+        let new_score = bio_credit::get_score(user_addr);
+        assert!(new_score < initial_score, 1);
+        assert!(bio_credit::get_personal_streak(user_addr) == 0, 2);
+    }
+
+    #[test(user = @0x123)]
+    fun test_daily_checkin(user: &signer) {
+        setup_test(user);
+        bio_credit::register_user(user, b"device");
+        let user_addr = signer::address_of(user);
+
+        let date = string::utf8(b"2026-02-13");
+        bio_credit::record_checkin_for_test(
+            user_addr,
+            date,
+            true,
+            timestamp::now_seconds(),
+            b"sig"
+        );
     }
 }
 
