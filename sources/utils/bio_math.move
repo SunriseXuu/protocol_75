@@ -14,6 +14,7 @@
 ///
 /// 核心思想：输入状态 + 配置 -> 输出新状态 (Pure Functions)
 module protocol_75::bio_math {
+
     friend protocol_75::bio_credit;
 
     // 数值常量 (Constants) ---------------------------------------------
@@ -276,23 +277,6 @@ module protocol_75::bio_math {
         deduct_energy_from_score(current_score, penalty_energy)
     }
 
-    /// 计算任务获得的能量
-    public(friend) fun calculate_energy_gain(difficulty: u64, count: u64): u64 {
-        difficulty * count * ENERGY_SCALING_FACTOR
-    }
-
-    // Getter 方法 ----------------------------------------------------
-
-    /// 获取初始分数
-    public fun get_credit_init(): u64 {
-        CREDIT_INIT
-    }
-
-    /// 获取最大分数
-    public fun get_credit_max(): u64 {
-        CREDIT_MAX
-    }
-
     // 私有方法 (Private Methods) ---------------------------------------
 
     /// 线性插值 (Linear Interpolation)
@@ -473,6 +457,23 @@ module protocol_75::bio_math {
 
             (final_s, available_energy)
         }
+    }
+
+    // Getter 方法 ----------------------------------------------------
+
+    /// 计算任务获得的能量
+    public fun calculate_energy_gain(difficulty: u64, count: u64): u64 {
+        difficulty * count * ENERGY_SCALING_FACTOR
+    }
+
+    /// 获取初始分数
+    public fun get_credit_init(): u64 {
+        CREDIT_INIT
+    }
+
+    /// 获取最大分数
+    public fun get_credit_max(): u64 {
+        CREDIT_MAX
     }
 }
 
