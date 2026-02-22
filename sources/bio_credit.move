@@ -62,7 +62,7 @@ module protocol_75::bio_credit {
     /// 用户每日行为数据 (轻量级结构)
     struct DailyData has store, drop {
         /// 目标是否达成
-        is_goal_achieved: bool,
+        is_achieved: bool,
         /// 时间戳
         timestamp: u64,
         /// 签名哈希
@@ -77,8 +77,10 @@ module protocol_75::bio_credit {
         highest_score: u64,
         /// 个人连胜场次
         personal_streak: u64,
+        /// 波动率
+        volatility: u64,
         /// 上次分数更新时间 (用于懒惰计算衰减)
-        last_update_time: u64,
+        last_update_timestamp: u64,
         /// 设备指纹哈希 (绑定常用设备)
         device_hash: vector<u8>,
         /// 获得的勋章列表
@@ -90,7 +92,7 @@ module protocol_75::bio_credit {
     /// 信用变更事件
     struct ScoreUpdateEvent has store, drop {
         /// 用户地址
-        user: address,
+        user_addr: address,
         /// 旧分数
         old_score: u64,
         /// 新分数
@@ -102,7 +104,7 @@ module protocol_75::bio_credit {
     }
 
     /// 事件句柄容器
-    struct Events has key {
+    struct EventHandle has key {
         score_events: event::EventHandle<ScoreUpdateEvent>
     }
 
@@ -126,18 +128,19 @@ module protocol_75::bio_credit {
                 score: bio_math::get_credit_init(),
                 highest_score: bio_math::get_credit_init(),
                 personal_streak: 0,
-                last_update_time: timestamp::now_seconds(),
+                volatility: 0,
+                last_update_timestamp: timestamp::now_seconds(),
                 device_hash,
                 badges: vector::empty(),
                 daily_checkin_log: table::new()
             }
         );
 
-        // 如果没有创建 Events 资源，则创建
-        if (!exists<Events>(user_addr)) {
+        // 如果没有创建 EventHandle 资源，则创建
+        if (!exists<EventHandle>(user_addr)) {
             move_to(
                 user,
-                Events {
+                EventHandle {
                     score_events: account::new_event_handle<ScoreUpdateEvent>(user)
                 }
             );
@@ -151,23 +154,23 @@ module protocol_75::bio_credit {
     /// 本函数仅负责“记账”，不负责“算分”、“连胜”和“能量”。
     /// 算分逻辑由 challenge_manager 在确认合规后调用 `update_score_and_streak`。
     ///
-    /// @param user: 用户地址
+    /// @param user_addr: 用户地址
     /// @param date_key: 日期键 e.g. "2026-02-12"
-    /// @param is_goal_achieved: 目标是否达成
+    /// @param is_achieved: 目标是否达成
     /// @param timestamp: 时间戳
     /// @param signature_hash: 签名哈希
     public(friend) fun record_daily_checkin(
-        user: address,
+        user_addr: address,
         date_key: String,
-        is_goal_achieved: bool,
+        is_achieved: bool,
         timestamp: u64,
         signature_hash: vector<u8>
     ) acquires BioSoul {
         // 若用户未注册，则报错
-        assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
+        assert!(exists<BioSoul>(user_addr), E_NOT_REGISTERED);
 
-        let bio_soul = borrow_global_mut<BioSoul>(user);
-        let daily_data = DailyData { is_goal_achieved, timestamp, signature_hash };
+        let bio_soul = borrow_global_mut<BioSoul>(user_addr);
+        let daily_data = DailyData { is_achieved, timestamp, signature_hash };
 
         // 若用户已打卡，则更新
         if (bio_soul.daily_checkin_log.contains(date_key)) {
@@ -184,43 +187,44 @@ module protocol_75::bio_credit {
     ///
     /// 包含核心的“能量成本积分”逻辑
     ///
-    /// @param user: 用户地址
-    /// @param is_task_achieved: 任务是否达成
+    /// @param user_addr: 用户地址
+    /// @param is_compliant: 挑战是否履约
     /// @param difficulty: 任务组合的综合难度系数
-    /// @param achieved_goal_count: 累积的达成目标次数
+    /// @param achieved_count: 累积的达成目标次数
     public(friend) fun update_score_and_streak(
-        user: address,
-        is_task_achieved: bool,
+        user_addr: address,
+        is_compliant: bool,
         difficulty: u64,
-        achieved_goal_count: u64
-    ) acquires BioSoul, Events {
+        achieved_count: u64
+    ) acquires BioSoul, EventHandle {
         // 若用户未注册，则报错
-        assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
+        assert!(exists<BioSoul>(user_addr), E_NOT_REGISTERED);
 
-        let bio_soul = borrow_global_mut<BioSoul>(user);
+        let bio_soul = borrow_global_mut<BioSoul>(user_addr);
         let old_score = bio_soul.score;
 
         // 先应用衰减
         let new_score =
             bio_math::calculate_decayed_score(
                 old_score,
-                bio_soul.last_update_time,
+                bio_soul.last_update_timestamp,
                 timestamp::now_seconds()
             );
         // 如果分数发生变化，则更新并发出事件
         if (new_score != old_score) {
             bio_soul.score = new_score;
-            emit_score_event(user, old_score, new_score, EVENT_DECAY);
+            emit_score_event(user_addr, old_score, new_score, EVENT_DECAY);
         };
 
         // 如果任务达成
-        if (is_task_achieved) {
+        if (is_compliant) {
             // 增加连胜
             bio_soul.personal_streak += 1;
 
             // 计算本次达成目标产生的总能量
-            let energy_gain =
-                bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
+            let energy_gain = bio_math::calculate_energy_gain(
+                difficulty, achieved_count
+            );
 
             // 加分积分计算：根据 cost 曲线消耗能量
             let new_score =
@@ -233,7 +237,12 @@ module protocol_75::bio_credit {
             };
 
             // 发出奖励事件
-            emit_score_event(user, old_score, bio_soul.score, EVENT_REWARD);
+            emit_score_event(
+                user_addr,
+                old_score,
+                bio_soul.score,
+                EVENT_REWARD
+            );
         }
         // 如果任务失败
         else {
@@ -243,8 +252,9 @@ module protocol_75::bio_credit {
             // 计算原本应得的能量 (作为惩罚基数)
             // 对称性原则: 假如你完成了这个难度的任务，你能得多少能量
             // 现在你失败了，我们就用这个能量值反向积分扣除
-            let energy_base =
-                bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
+            let energy_base = bio_math::calculate_energy_gain(
+                difficulty, achieved_count
+            );
 
             // 扣分计算 (Slash) - 使用积分逻辑
             bio_soul.score = bio_math::calculate_slashed_score(
@@ -252,23 +262,28 @@ module protocol_75::bio_credit {
             );
 
             // 发出惩罚事件
-            emit_score_event(user, old_score, bio_soul.score, EVENT_SLASH);
+            emit_score_event(
+                user_addr,
+                old_score,
+                bio_soul.score,
+                EVENT_SLASH
+            );
         };
 
         // 更新时间戳
-        bio_soul.last_update_time = timestamp::now_seconds();
+        bio_soul.last_update_timestamp = timestamp::now_seconds();
     }
 
     /// 挂载勋章 (Attach Badge)
     ///
-    /// @param user: 用户地址
+    /// @param user_addr: 用户地址
     /// @param badge: 勋章对象
     public(friend) fun attach_badge(
-        user: address, badge: Object<AchievementBadge>
+        user_addr: address, badge: Object<AchievementBadge>
     ) acquires BioSoul {
-        assert!(exists<BioSoul>(user), E_NOT_REGISTERED);
+        assert!(exists<BioSoul>(user_addr), E_NOT_REGISTERED);
 
-        let bio_soul = borrow_global_mut<BioSoul>(user);
+        let bio_soul = borrow_global_mut<BioSoul>(user_addr);
         bio_soul.badges.push_back(badge);
     }
 
@@ -276,21 +291,24 @@ module protocol_75::bio_credit {
 
     /// 发出分数变化事件 (Emit Score Event)
     ///
-    /// @param user: 用户地址
-    /// @param old: 旧分数
-    /// @param new: 新分数
+    /// @param user_addr: 用户地址
+    /// @param old_score: 旧分数
+    /// @param new_score: 新分数
     /// @param event_type: 事件类型
     fun emit_score_event(
-        user: address, old: u64, new: u64, event_type: u8
-    ) acquires Events {
-        if (exists<Events>(user)) {
-            let events = borrow_global_mut<Events>(user);
+        user_addr: address,
+        old_score: u64,
+        new_score: u64,
+        event_type: u8
+    ) acquires EventHandle {
+        if (exists<EventHandle>(user_addr)) {
+            let events = borrow_global_mut<EventHandle>(user_addr);
             event::emit_event(
                 &mut events.score_events,
                 ScoreUpdateEvent {
-                    user,
-                    old_score: old,
-                    new_score: new,
+                    user_addr,
+                    old_score,
+                    new_score,
                     event_type,
                     timestamp: timestamp::now_seconds()
                 }
@@ -304,37 +322,37 @@ module protocol_75::bio_credit {
     /// 预览做任务后的分数 (Preview Reward)
     /// 模拟“衰减 + 结算”，不改变状态
     ///
-    /// @param user: 用户地址
-    /// @param is_task_achieved: 假设任务是否合规
+    /// @param user_addr: 用户地址
+    /// @param is_compliant: 假设挑战是否履约
     /// @param difficulty: 任务难度
-    /// @param achieved_goal_count: 达成目标次数
+    /// @param achieved_count: 达成目标次数
     /// @return: (预计分数, 分数变化量)
     public fun preview_reward(
-        user: address,
-        is_task_achieved: bool,
+        user_addr: address,
+        is_compliant: bool,
         difficulty: u64,
-        achieved_goal_count: u64
+        achieved_count: u64
     ): (u64, u64) acquires BioSoul {
-        if (!exists<BioSoul>(user)) {
+        if (!exists<BioSoul>(user_addr)) {
             return (0, 0)
         };
 
-        let bio_soul = borrow_global<BioSoul>(user);
+        let bio_soul = borrow_global<BioSoul>(user_addr);
 
         // 1. 模拟衰减
         let score_after_decay =
             bio_math::calculate_decayed_score(
                 bio_soul.score,
-                bio_soul.last_update_time,
+                bio_soul.last_update_timestamp,
                 timestamp::now_seconds()
             );
 
         // 2. 模拟结算
         let final_score =
-            if (is_task_achieved) {
+            if (is_compliant) {
                 // 计算能量
                 let energy_gain =
-                    bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
+                    bio_math::calculate_energy_gain(difficulty, achieved_count);
 
                 // 加分积分
                 let integrated_score =
@@ -343,7 +361,7 @@ module protocol_75::bio_credit {
             } else {
                 // 扣分倍率
                 let energy_base =
-                    bio_math::calculate_energy_gain(difficulty, achieved_goal_count);
+                    bio_math::calculate_energy_gain(difficulty, achieved_count);
 
                 bio_math::calculate_slashed_score(score_after_decay, energy_base)
             };
@@ -361,33 +379,33 @@ module protocol_75::bio_credit {
     #[view]
     /// 获取用户当前的链上分数
     ///
-    /// @param user: 用户地址
+    /// @param user_addr: 用户地址
     /// @return u64: 用户链上分数
-    public fun get_score(user: address): u64 acquires BioSoul {
-        if (!exists<BioSoul>(user)) {
+    public fun get_score(user_addr: address): u64 acquires BioSoul {
+        if (!exists<BioSoul>(user_addr)) {
             return 0
         };
 
-        borrow_global<BioSoul>(user).score
+        borrow_global<BioSoul>(user_addr).score
     }
 
     #[view]
     /// 获取用户包含“预测衰减”的实时有效分数
     /// 前端展示时应优先使用此函数，以反映实时状态
     ///
-    /// @param user: 用户地址
+    /// @param user_addr: 用户地址
     /// @return u64: 用户实时有效分数
-    public fun get_effective_score(user: address): u64 acquires BioSoul {
-        if (!exists<BioSoul>(user)) {
+    public fun get_effective_score(user_addr: address): u64 acquires BioSoul {
+        if (!exists<BioSoul>(user_addr)) {
             return 0
         };
 
-        let bio_soul = borrow_global<BioSoul>(user);
+        let bio_soul = borrow_global<BioSoul>(user_addr);
 
         // 使用公共逻辑计算
         bio_math::calculate_decayed_score(
             bio_soul.score,
-            bio_soul.last_update_time,
+            bio_soul.last_update_timestamp,
             timestamp::now_seconds()
         )
     }
@@ -395,14 +413,14 @@ module protocol_75::bio_credit {
     #[view]
     /// 获取用户个人的连胜场次
     ///
-    /// @param user: 用户地址
+    /// @param user_addr: 用户地址
     /// @return u64: 用户连胜场次
-    public fun get_personal_streak(user: address): u64 acquires BioSoul {
-        if (!exists<BioSoul>(user)) {
+    public fun get_personal_streak(user_addr: address): u64 acquires BioSoul {
+        if (!exists<BioSoul>(user_addr)) {
             return 0
         };
 
-        borrow_global<BioSoul>(user).personal_streak
+        borrow_global<BioSoul>(user_addr).personal_streak
     }
 
     // 单元测试 (Unit Tests) --------------------------------------------

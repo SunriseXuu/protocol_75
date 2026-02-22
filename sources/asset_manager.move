@@ -77,11 +77,11 @@ module protocol_75::asset_manager {
     /// 当用户发起举报时，临时托管其保证金。
     struct ReportBond has key {
         /// 保证金代币
-        coins: Coin<TestUSD>,
+        coin: Coin<TestUSD>,
         /// 保证金额度
         amount: u64,
         /// 举报者地址 (冗余存储，便于校验)
-        reporter: address
+        reporter_addr: address
     }
 
     // 用户接口 (User Entries) ----------------------------------------
@@ -264,21 +264,21 @@ module protocol_75::asset_manager {
     public(friend) fun collect_report_bond(
         reporter: &signer, amount: u64
     ) acquires ReportBond {
-        let coins = coin::withdraw<TestUSD>(reporter, amount);
+        let coin = coin::withdraw<TestUSD>(reporter, amount);
         let reporter_addr = signer::address_of(reporter);
 
         // 如果已有保证金记录，则追加 (支持多重举报场景)
         if (exists<ReportBond>(reporter_addr)) {
             let bond = borrow_global_mut<ReportBond>(reporter_addr);
 
-            coin::merge(&mut bond.coins, coins);
+            coin::merge(&mut bond.coin, coin);
             bond.amount += amount;
         }
         // 如果没有，则创建新记录
         else {
             move_to(
                 reporter,
-                ReportBond { coins, amount, reporter: reporter_addr }
+                ReportBond { coin, amount, reporter_addr }
             );
         };
     }
@@ -298,23 +298,23 @@ module protocol_75::asset_manager {
         let bond = borrow_global_mut<ReportBond>(reporter_addr);
 
         // 从总保证金中提取指定金额
-        let release_coins = coin::extract(&mut bond.coins, amount);
+        let release_coin = coin::extract(&mut bond.coin, amount);
         bond.amount -= amount;
 
         // 退还
         if (is_return) {
-            coin::deposit(reporter_addr, release_coins);
+            coin::deposit(reporter_addr, release_coin);
         }
         // 罚没 (转入协议金库)
         else {
-            coin::deposit(TREASURY_ADDR, release_coins);
+            coin::deposit(TREASURY_ADDR, release_coin);
         };
 
         // 如果剩余保证金为0，销毁资源以释放存储空间
-        if (coin::value(&bond.coins) == 0) {
-            let ReportBond { coins, amount: _, reporter: _ } =
+        if (coin::value(&bond.coin) == 0) {
+            let ReportBond { coin, amount: _, reporter_addr: _ } =
                 move_from<ReportBond>(reporter_addr);
-            coin::destroy_zero(coins);
+            coin::destroy_zero(coin);
         };
     }
 
@@ -378,9 +378,9 @@ module protocol_75::asset_manager {
 
         // 注册用户并铸造代币以便测试用于 deposit
         coin::register<TestUSD>(user);
-        let coins = protocol_75::test_usd::mint_for_test(admin, 1000000);
-        coin::deposit(user_addr, coins);
-        // test_usd::burn_for_test(coins); // Burn to avoid drop error
+        let coin = protocol_75::test_usd::mint_for_test(admin, 1000000);
+        coin::deposit(user_addr, coin);
+        // test_usd::burn_for_test(coin); // Burn to avoid drop error
     }
 
     #[test_only]

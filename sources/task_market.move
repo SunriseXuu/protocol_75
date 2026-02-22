@@ -88,6 +88,15 @@ module protocol_75::task_market {
         is_active: bool
     }
 
+    struct GoalConfig has store, drop, copy {
+        /// 每单位难度权重
+        weight: u64,
+        /// 目标下限
+        min: u64,
+        /// 目标上限
+        max: u64,
+    }
+
     /// 任务池 (Task Pool)
     /// 单例资源，存储在 ADMIN_ADDR 下，维护所有任务配置。
     struct TaskPool has key {

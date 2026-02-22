@@ -17,7 +17,7 @@ module protocol_75::badge_factory {
 
     // 核心勋章资产 (NFT)
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
-    struct AchievementBadge has key, store {
+    struct AchievementBadge has key {
         name: String,
         badge_type: u8, // 1=系统勋章, 2=商业勋章
         metadata_uri: String,
@@ -27,7 +27,7 @@ module protocol_75::badge_factory {
 
     /// 铸造系统勋章 (仅限 Friend 调用)
     public(friend) fun mint_system_badge(
-        creator: &signer, recipient: address, badge_type: u8
+        creator: &signer, recipient_addr: address, badge_type: u8
     ): Object<AchievementBadge> {
         // 构造元数据
         let name =
@@ -58,9 +58,9 @@ module protocol_75::badge_factory {
 
         // 转移对象所有权给接收者
         let object_addr = constructor_ref.address_from_constructor_ref();
-        if (object_addr != recipient) {
+        if (object_addr != recipient_addr) {
             let badge_obj = object::address_to_object<AchievementBadge>(object_addr);
-            object::transfer(creator, badge_obj, recipient);
+            object::transfer(creator, badge_obj, recipient_addr);
         };
 
         object::address_to_object<AchievementBadge>(object_addr)
@@ -69,7 +69,7 @@ module protocol_75::badge_factory {
     /// 铸造商业勋章 (仅限 Friend 调用)
     public(friend) fun mint_commercial_badge(
         creator: &signer,
-        recipient: address,
+        recipient_addr: address,
         brand_name: String,
         metadata_uri: String
     ): Object<AchievementBadge> {
@@ -87,7 +87,7 @@ module protocol_75::badge_factory {
 
         let object_addr = constructor_ref.address_from_constructor_ref();
         let badge_obj = object::address_to_object<AchievementBadge>(object_addr);
-        object::transfer(creator, badge_obj, recipient);
+        object::transfer(creator, badge_obj, recipient_addr);
 
         object::address_to_object<AchievementBadge>(object_addr)
     }
