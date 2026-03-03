@@ -123,6 +123,8 @@ module protocol_75::task_market {
         let task_configs = table::new<u8, TaskConfig>();
 
         // 默认任务1. 每日锻炼 (Daily Exercise)
+        // 目标1. 卡路里消耗 (Calories Burned)：每单位权重 1，合理范围 200-2000 卡路里
+        // 目标2. 锻炼时长 (Exercise Duration)：每单位权重 3，合理范围 30-300 分钟
         let goal_config1 = simple_map::new();
         goal_config1.add(
             GOAL_CALORIES_BURNED,
@@ -137,6 +139,9 @@ module protocol_75::task_market {
         );
 
         // 默认任务2. 合规睡眠 (Compliant Sleep)
+        // 目标1. 入睡时间 (Bedtime)：每单位权重 0，合理范围 0-86399 秒（当天内的任意时刻）
+        // 目标2. 苏醒时间 (Wake Time)：每单位权重 0，合理范围 0-86399 秒（当天内的任意时刻）
+        // 目标3. 合规睡眠时长 (Compliant Sleep Duration)：每单位权重 5，合理范围 7-9 小时
         let goal_config2 = simple_map::new();
         goal_config2.add(
             GOAL_BEDTIME, GoalConfig { weight_per_unit: 0, goal_min: 0, goal_max: 86399 }
@@ -153,6 +158,7 @@ module protocol_75::task_market {
         );
 
         // 默认任务3. 正念冥想 (Mindful Meditation)
+        // 目标1. 冥想时长 (Meditation Duration)：每单位权重 5，合理范围 10-120 分钟
         let goal_config3 = simple_map::new();
         goal_config3.add(
             GOAL_MEDITATION_DURATION,
