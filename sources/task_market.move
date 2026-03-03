@@ -1,25 +1,24 @@
 /// # 任务市场模块 (Task Market)
 ///
 /// ## 功能描述
-/// 本模块主要负责定义和管理“自律任务”，为上层 Challenge 应用提供基础的任务验证与难度计算服务。
+/// 该模块充当协议的行为定义中心，管理所有支持的自律指标与规则参数
 /// 核心功能包括：
-/// 1. **任务定义**：定义标准的任务原子类型（如运动时长、卡路里消耗、睡眠等）。
-/// 2. **任务池管理**：管理员可配置各类任务的权重、目标上下限及启用状态。
-/// 3. **难度计算**：根据任务权重和设定的目标值，计算任务组合的综合难度系数。
+/// 1. **定义任务原子**：定义并维护了一组标准化的“任务原子”（如每日锻炼、合规睡眠、正念冥想）
+/// 2. **任务池参数管理**：管理并校验各类任务原子的指标属性（如目标时长、卡路里消耗的上下限与对应的权重）
+/// 3. **自由组合与难度合成**：允许用户自由设定参数，将多个任务原子合成为独立的“任务组合”，并根据设定的参数强度自动合成对应的每日最低能量下限，以此作为后续信用分计算的基础权重
 ///
-/// ## 设计原则
-/// - **客观性**：任务数据来源于可信的第三方健康平台，并通过预言机验签，拒绝人为造假。
-/// - **原子化**：任务被拆解为不可再分的“原子”，支持灵活组合。
-/// - **安全性**：在计算难度时严格校验任务参数的有效性（存在性、激活状态、数值范围）。
-/// - **合理化**：
-///     - 卡路里消耗和锻炼时长不依赖锻炼方式，测量方便、人人皆宜
-///     - 合规睡眠时长等于承诺的窗口期与实际睡眠时间的交集
+/// ## 核心机制
+/// - **基于客观数据**：所有任务验证均采用“链下计算，链上验证”模式，依赖高可信物理硬件（如原生智能手表）的数据作为输入，彻底防范人为表单造假
+/// - **原子化与可扩展性**：采用面向资源的设计哲学，定义基础的标准任务单元，未来可灵活支持更多元的高阶健康指标
+/// - **安全性与防作弊**：严格约束单次允许设置的健康指标范围（Min/Max）以阻断低门槛或超人类极限的刷分行为
+/// - **非线性激励基础**：输出由各任务原子难度复合叠加而成的日能量下限，直接服务于信用算法模型中的积分阻尼与动态清算环节
 ///
 /// ## 模块依赖
-/// - 本模块为底层基础模块，无外部依赖。
-/// - 被 `challenge_manager` 等上层业务模块调用。
+/// - 纯粹的底层数据与规则库，无上层依赖
+/// - 作为基础模块，被 `challenge_manager` 在初始化组局和清算判定时调用
 module protocol_75::task_market {
     use std::signer;
+    use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_std::table::{Self, Table};
 
     friend protocol_75::challenge_manager;
@@ -28,8 +27,8 @@ module protocol_75::task_market {
 
     /// 错误：权限不足 (非管理员调用)
     const E_NOT_ADMIN: u64 = 1;
-    /// 错误：无效的任务 ID (未通过配置表检查)
-    const E_INVALID_TASK_ID: u64 = 2;
+    /// 错误：无效的任务原子 ID (未通过配置表检查)
+    const E_INVALID_TASK_ATOM_ID: u64 = 2;
     /// 错误：无效的任务目标值 (超出允许的 Min/Max 范围)
     const E_INVALID_TASK_GOAL: u64 = 3;
     /// 错误：无效的任务边界值 (例如 Min > Max)
@@ -39,277 +38,323 @@ module protocol_75::task_market {
 
     // 常量 (Constants) -----------------------------------------------
 
-    /// 任务 ID: 卡路里消耗 (Calories Burned)
-    const TASK_CALORIES_BURNED: u8 = 1;
-    /// 任务 ID: 锻炼时长 (Exercise Duration)
-    const TASK_EXERCISE_DURATION: u8 = 2;
-    /// 任务 ID: 合规睡眠时长 (Sleep Duration)
-    const TASK_SLEEP_DURATION: u8 = 3;
-    /// 任务 ID: 冥想时长 (Meditation Duration)
-    const TASK_MEDITATION_DURATION: u8 = 4;
-
     /// 管理员/部署者地址
     const ADMIN_ADDR: address = @protocol_75;
+    /// 能量放大系数
+    const ENERGY_SCALING_FACTOR: u64 = 500;
+
+    /// 任务 ID: 每日锻炼
+    const TASK_DAILY_EXERCISE: u8 = 1;
+    /// 任务 ID: 合规睡眠
+    const TASK_COMPLIANT_SLEEP: u8 = 2;
+    /// 任务 ID: 正念冥想
+    const TASK_MINDFUL_MEDITATION: u8 = 3;
+
+    /// 目标 ID: 卡路里消耗
+    const GOAL_CALORIES_BURNED: u8 = 1;
+    /// 目标 ID: 锻炼时长
+    const GOAL_EXERCISE_DURATION: u8 = 2;
+    /// 目标 ID: 入睡时间
+    const GOAL_BEDTIME: u8 = 3;
+    /// 目标 ID: 苏醒时间
+    const GOAL_WAKE_TIME: u8 = 4;
+    /// 目标 ID: 合规睡眠时长
+    const GOAL_SLEEP_DURATION: u8 = 5;
+    /// 目标 ID: 冥想时长
+    const GOAL_MEDITATION_DURATION: u8 = 6;
 
     // 数据结构 (Data Structures) ---------------------------------------
 
-    /// 任务原子 (Task Atom)
-    /// 代表一个具体的、可量化的任务单元。
-    struct TaskAtom has store, drop, copy {
-        /// 任务类型 ID
-        task_id: u8,
-        /// 任务目标数值 (单位取决于具体任务类型，如 kcal, min)
+    /// 任务目标参数
+    struct GoalParam has store, drop, copy {
+        /// 每单位目标的权重
+        weight_per_unit: u64,
+        /// 目标值
         goal: u64
     }
 
+    /// 任务原子 (Task Atom)
+    struct TaskAtom has store, drop, copy {
+        /// 任务原子 ID
+        task_atom_id: u8,
+        /// 任务目标 ID 列表
+        goal_ids: vector<u8>,
+        /// 任务目标参数映射 goal_id => GoalParam
+        goal_params: SimpleMap<u8, GoalParam>
+    }
+
     /// 任务组合 (Task Combo)
-    /// 包含一组任务原子及其计算出的综合难度。
     struct TaskCombo has store, drop, copy {
         /// 任务原子列表
         task_atoms: vector<TaskAtom>,
-        /// 综合难度系数
-        difficulty: u64,
-        /// 达成目标的次数下限
-        achieved_goal_min: u64
+        /// 每日至少所需的能量值
+        daily_energy_least: u64,
+        /// 至少所需的达成次数
+        achieved_count_least: u64
     }
 
-    /// 任务配置项 (Task Config Item)
-    /// 存储每种任务类型的规则参数。
-    struct TaskConfigItem has store, drop, copy {
-        /// 任务名称 (如 "Calories Burned")
-        name: vector<u8>,
-        /// 任务难度权重 (每单位目标值对应的难度分数)
-        weight: u64,
-        /// 任务目标下限
+    /// 任务配置 (Task Config)
+    struct GoalConfig has store, drop, copy {
+        /// 每单位目标的权重
+        weight_per_unit: u64,
+        /// 目标最小值
         goal_min: u64,
-        /// 任务目标上限
-        goal_max: u64,
-        /// 任务是否启用 (False 表示暂时废弃该任务类型)
+        /// 目标最大值
+        goal_max: u64
+    }
+
+    /// 任务配置 (Task Config)
+    struct TaskConfig has store, drop, copy {
+        /// 任务目标配置映射 goal_id => GoalConfig
+        goal_config: SimpleMap<u8, GoalConfig>,
+        /// 任务是否激活
         is_active: bool
     }
 
-    struct GoalConfig has store, drop, copy {
-        /// 每单位难度权重
-        weight: u64,
-        /// 目标下限
-        min: u64,
-        /// 目标上限
-        max: u64,
-    }
-
     /// 任务池 (Task Pool)
-    /// 单例资源，存储在 ADMIN_ADDR 下，维护所有任务配置。
     struct TaskPool has key {
-        /// 任务池映射关系: task_id -> task_config_item
-        pool: Table<u8, TaskConfigItem>
+        /// 任务配置映射 task_atom_id => TaskConfig
+        task_configs: Table<u8, TaskConfig>
     }
 
-    /// 模块初始化 (仅在部署时调用)
-    /// 设置默认支持的任务类型与参数
+    // 初始化 (Init) ---------------------------------------------------
+
     fun init_module(admin: &signer) {
-        // 创建任务池的默认配置表
-        let pool = table::new<u8, TaskConfigItem>();
+        let task_configs = table::new<u8, TaskConfig>();
 
-        // 默认任务1. 卡路里消耗 (Calories Burned)
-        // 目标：200千卡 - 10000千卡
-        pool.add(
-            TASK_CALORIES_BURNED,
-            TaskConfigItem {
-                name: b"Calories Burned",
-                weight: 1,
-                goal_min: 200,
-                goal_max: 10000,
-                is_active: true
-            }
+        // 默认任务1. 每日锻炼 (Daily Exercise)
+        let goal_config1 = simple_map::new();
+        goal_config1.add(
+            GOAL_CALORIES_BURNED,
+            GoalConfig { weight_per_unit: 1, goal_min: 200, goal_max: 2000 }
         );
-        // 默认任务2. 锻炼时长 (Exercise Duration)
-        // 目标：30分钟 - 300分钟
-        pool.add(
-            TASK_EXERCISE_DURATION,
-            TaskConfigItem {
-                name: b"Exercise Duration",
-                weight: 10,
-                goal_min: 30,
-                goal_max: 300,
-                is_active: true
-            }
+        goal_config1.add(
+            GOAL_EXERCISE_DURATION,
+            GoalConfig { weight_per_unit: 3, goal_min: 30, goal_max: 300 }
         );
-        // 默认任务3. 合规睡眠时长 (Sleep Duration)
-        // 目标：420分钟(7h) - 540分钟(9h)
-        pool.add(
-            TASK_SLEEP_DURATION,
-            TaskConfigItem {
-                name: b"Sleep Duration",
-                weight: 1,
-                goal_min: 420,
-                goal_max: 540,
-                is_active: true
-            }
-        );
-        // 默认任务4. 冥想时长 (Meditation Duration)
-        // 目标：10分钟 - 120分钟
-        pool.add(
-            TASK_MEDITATION_DURATION,
-            TaskConfigItem {
-                name: b"Meditation Duration",
-                weight: 20,
-                goal_min: 10,
-                goal_max: 120,
-                is_active: true
-            }
+        task_configs.add(
+            TASK_DAILY_EXERCISE, TaskConfig { goal_config: goal_config1, is_active: true }
         );
 
-        // 将 TaskPool 资源发布到管理员账户下
-        move_to(admin, TaskPool { pool });
+        // 默认任务2. 合规睡眠 (Compliant Sleep)
+        let goal_config2 = simple_map::new();
+        goal_config2.add(
+            GOAL_BEDTIME, GoalConfig { weight_per_unit: 0, goal_min: 0, goal_max: 86399 }
+        );
+        goal_config2.add(
+            GOAL_WAKE_TIME, GoalConfig { weight_per_unit: 0, goal_min: 0, goal_max: 86399 }
+        );
+        goal_config2.add(
+            GOAL_SLEEP_DURATION,
+            GoalConfig { weight_per_unit: 5, goal_min: 28, goal_max: 36 }
+        );
+        task_configs.add(
+            TASK_COMPLIANT_SLEEP, TaskConfig { goal_config: goal_config2, is_active: true }
+        );
+
+        // 默认任务3. 正念冥想 (Mindful Meditation)
+        let goal_config3 = simple_map::new();
+        goal_config3.add(
+            GOAL_MEDITATION_DURATION,
+            GoalConfig { weight_per_unit: 5, goal_min: 10, goal_max: 120 }
+        );
+        task_configs.add(
+            TASK_MINDFUL_MEDITATION,
+            TaskConfig { goal_config: goal_config3, is_active: true }
+        );
+
+        move_to(admin, TaskPool { task_configs });
     }
 
     // 管理员接口 (Admin Entries) ----------------------------------------
 
-    /// 更新或新增任务配置 (Upsert Task Pool)
+    /// 新增或更新任务配置 (Upsert Task Config)
+    /// 管理员可通过该接口新增或更新任务原子配置，包括目标权重、目标上下限及启用状态
     ///
-    /// @param admin: 管理员账户签名
-    /// @param task_id: 任务类型 ID
-    /// @param name: 任务名称
-    /// @param weight: 难度权重
-    /// @param goal_min: 最小目标值
-    /// @param goal_max: 最大目标值
-    /// @param is_active: 是否启用
+    /// @param admin 管理员 signer
+    /// @param task_atom_id 任务原子 ID
+    /// @param goal_ids 目标 ID 列表
+    /// @param weight_per_units 每单位目标的权重列表 (与 goal_ids 顺序对应)
+    /// @param goal_mins 目标最小值列表 (与 goal_ids 顺序对应)
+    /// @param goal_maxs 目标最大值列表 (与 goal_ids 顺序对应)
+    /// @param is_active 任务是否启用
     public entry fun upsert_task_pool(
         admin: &signer,
-        task_id: u8,
-        name: vector<u8>,
-        weight: u64,
-        goal_min: u64,
-        goal_max: u64,
+        task_atom_id: u8,
+        goal_ids: vector<u8>,
+        weight_per_units: vector<u64>,
+        goal_mins: vector<u64>,
+        goal_maxs: vector<u64>,
         is_active: bool
     ) acquires TaskPool {
         // 鉴权检查
         assert!(signer::address_of(admin) == ADMIN_ADDR, E_NOT_ADMIN);
-        // 参数边界检查
-        assert!(goal_min <= goal_max, E_INVALID_TASK_EDGES);
+
+        // 检查参数长度一致性
+        let len = goal_ids.length();
+        assert!(weight_per_units.length() == len, E_INVALID_TASK_EDGES);
+        assert!(goal_mins.length() == len, E_INVALID_TASK_EDGES);
+        assert!(goal_maxs.length() == len, E_INVALID_TASK_EDGES);
+
+        // 检查参数边界并构建 goal_config
+        let goal_config = simple_map::new();
+        let i = 0;
+        while (i < len) {
+            let goal_id = goal_ids[i];
+            let weight_per_unit = weight_per_units[i];
+            let goal_min = goal_mins[i];
+            let goal_max = goal_maxs[i];
+
+            assert!(goal_min <= goal_max, E_INVALID_TASK_EDGES);
+
+            goal_config.add(
+                goal_id, GoalConfig { weight_per_unit, goal_min, goal_max }
+            );
+
+            i += 1;
+        };
 
         let task_pool = borrow_global_mut<TaskPool>(ADMIN_ADDR);
-        let pool = &mut task_pool.pool;
+        let task_configs = &mut task_pool.task_configs;
 
-        let task_config_item = TaskConfigItem {
-            name,
-            weight,
-            goal_min,
-            goal_max,
-            is_active
-        };
-        // 存在则更新，不存在则添加
-        if (pool.contains(task_id)) {
-            *pool.borrow_mut(task_id) = task_config_item;
-        } else {
-            pool.add(task_id, task_config_item);
+        let task_config = TaskConfig { goal_config, is_active };
+
+        // 该任务原子存在，则更新
+        if (task_configs.contains(task_atom_id)) {
+            *task_configs.borrow_mut(task_atom_id) = task_config;
+        }
+        // 该任务原子不存在，则添加
+        else {
+            task_configs.add(task_atom_id, task_config);
         }
     }
 
     // 友元接口 (Friend Only) -------------------------------------------
 
-    /// 构建并验证一个新的任务原子 (New Task Atom)
+    /// 新建任务原子 (New Task Atom)
+    /// 仅可由上层 Challenge 模块通过该接口创建任务原子实例
     ///
-    /// @param task_id: 任务类型 ID
-    /// @param goal: 用户承诺或完成的任务数值
-    /// @return TaskAtom: 验证通过的任务原子对象
-    public(friend) fun new_task_atom(task_id: u8, goal: u64): TaskAtom acquires TaskPool {
+    /// @param task_atom_id 任务原子 ID
+    /// @param goal_ids 目标 ID 列表
+    /// @param goals 目标值列表 (与 goal_ids 顺序对应)
+    ///
+    /// @return 任务原子实例
+    public(friend) fun new_task_atom(
+        task_atom_id: u8, goal_ids: vector<u8>, goals: vector<u64>
+    ): TaskAtom acquires TaskPool {
+        // 检查参数长度一致性
+        let len = goal_ids.length();
+        assert!(goals.length() == len, E_INVALID_TASK_EDGES);
+
         let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
-        let pool = &task_pool.pool;
+        let task_configs = &task_pool.task_configs;
+
         // 检查任务配置是否存在
-        assert!(pool.contains(task_id), E_INVALID_TASK_ID);
+        assert!(task_configs.contains(task_atom_id), E_INVALID_TASK_ATOM_ID);
 
-        let task_config_item = pool.borrow(task_id);
+        let task_config = task_configs.borrow(task_atom_id);
+
         // 检查任务是否处于启用状态
-        assert!(task_config_item.is_active, E_TASK_DISABLED);
-        // 检查任务目标是否在允许范围内
-        assert!(
-            goal >= task_config_item.goal_min && goal <= task_config_item.goal_max,
-            E_INVALID_TASK_GOAL
-        );
+        assert!(task_config.is_active, E_TASK_DISABLED);
 
-        TaskAtom { task_id, goal }
-    }
+        // 检查参数边界并构建 goal
+        let goal_params = simple_map::new();
 
-    /// 构建任务组合 (New Task Combo)
-    ///
-    /// @param task_atoms: 用于组合任务的任务原子列表
-    /// @param achieved_goal_min: 达成目标的次数下限
-    /// @return TaskCombo: 新的任务组合
-    public(friend) fun new_task_combo(
-        task_atoms: vector<TaskAtom>, achieved_goal_min: u64
-    ): TaskCombo acquires TaskPool {
-        // 根据传入的任务原子列表，计算总难度并打包
-        let difficulty = calculate_difficulty(&task_atoms);
+        let i = 0;
+        while (i < len) {
+            let goal_id = goal_ids[i];
+            let goal_value = goals[i];
 
-        TaskCombo { task_atoms, difficulty, achieved_goal_min }
-    }
+            let goal_config_item = task_config.goal_config.borrow(&goal_id);
 
-    // 私有方法 (Private Methods) ---------------------------------------
-
-    /// 计算任务组合的综合难度系数 (Calculate Difficulty)
-    ///
-    /// 计算公式：Sum(TaskConfig.weight * TaskAtom.goal)
-    /// 遍历任务列表，再次验证每个任务原子的有效性，并累加难度。
-    ///
-    /// @param task_atoms: 任务原子列表引用
-    /// @return u64: 总难度系数
-    public(friend) fun calculate_difficulty(
-        task_atoms: &vector<TaskAtom>
-    ): u64 acquires TaskPool {
-        let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
-        let pool = &task_pool.pool;
-
-        let total_difficulty = 0;
-        let len = task_atoms.length();
-
-        for (i in 0..len) {
-            let task_atom = task_atoms[i];
-            // Double Check: 虽然 new_task_atom 已做过检查，但在组合计算时再次校验
-            // 可以防止配置在 TaskAtom 创建后被修改导致的潜在风险。
-
-            // 检查任务配置是否存在
-            assert!(pool.contains(task_atom.task_id), E_INVALID_TASK_ID);
-
-            let task_config_item = pool.borrow(task_atom.task_id);
-            // 检查任务是否处于启用状态
-            assert!(task_config_item.is_active, E_TASK_DISABLED);
             // 检查任务目标是否在允许范围内
             assert!(
-                task_atom.goal >= task_config_item.goal_min
-                    && task_atom.goal <= task_config_item.goal_max,
+                goal_value >= goal_config_item.goal_min
+                    && goal_value <= goal_config_item.goal_max,
                 E_INVALID_TASK_GOAL
             );
 
-            // 累加难度：权重 * 目标值
-            total_difficulty += task_config_item.weight * task_atom.goal;
+            goal_params.add(
+                goal_id,
+                GoalParam {
+                    weight_per_unit: goal_config_item.weight_per_unit,
+                    goal: goal_value
+                }
+            );
+
+            i += 1;
         };
 
-        total_difficulty
+        TaskAtom { task_atom_id, goal_ids, goal_params }
+    }
+
+    /// 新建任务组合 (New Task Combo)
+    /// 仅可由上层 Challenge 模块通过该接口创建任务组合实例
+    ///
+    /// @param task_atoms 任务原子列表
+    /// @param achieved_count_least 至少所需的达成次数
+    ///
+    /// @return 任务组合实例
+    public(friend) fun new_task_combo(
+        task_atoms: vector<TaskAtom>, achieved_count_least: u64
+    ): TaskCombo {
+        let daily_energy_least = calc_daily_energy_least(&task_atoms);
+        TaskCombo { task_atoms, daily_energy_least, achieved_count_least }
+    }
+
+    /// 计算每日至少所需的能量值 (Calculate Daily Minimum Energy)
+    /// 仅可由上层 Challenge 模块通过该接口计算任务组合的每日至少所需的能量值，用于计算违约后的惩罚
+    ///
+    /// @param task_atoms 任务原子列表
+    /// @return 每日至少所需的能量值
+    public(friend) fun calc_daily_energy_least(
+        task_atoms: &vector<TaskAtom>
+    ): u64 {
+        let total_difficulty = 0;
+
+        // 遍历任务原子列表
+        let i = 0;
+        while (i < task_atoms.length()) {
+            let task_atom = task_atoms.borrow(i);
+
+            let goal_ids = &task_atom.goal_ids;
+            let goal_params = &task_atom.goal_params;
+
+            // 遍历目标 ID 列表，获取其对应的权重并计算总能量值
+            let j = 0;
+            while (j < goal_ids.length()) {
+                let key = goal_ids[j];
+                let param = goal_params.borrow(&key);
+
+                // 将所有目标的能量值累加
+                total_difficulty += param.weight_per_unit * param.goal;
+
+                j += 1;
+            };
+
+            i += 1;
+        };
+
+        // 将总能量值乘以全局能量放大系数
+        ENERGY_SCALING_FACTOR * total_difficulty
     }
 
     // 视图方法 (View Methods) ------------------------------------------
 
     #[view]
-    /// 获取指定任务 ID 的配置详情 (Get Task Config)
-    ///
-    /// @param task_id: 指定任务 ID
-    /// @return name: 任务名称
-    /// @return weight: 难度权重
-    /// @return goal_min: 目标下限
-    /// @return goal_max: 目标上限
-    /// @return is_active: 是否启用
-    public fun get_task_config(task_id: u8): (vector<u8>, u64, u64, u64, bool) acquires TaskPool {
+    /// 视图函数：获取任务配置 (Get Task Config)
+    /// 提供查询接口，允许外部调用者获取特定任务原子 ID 的配置
+    /// 
+    /// @param task_atom_id 任务原子 ID
+    /// @return 任务配置
+    public fun get_task_config(task_atom_id: u8): TaskConfig acquires TaskPool {
         let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
-        let pool = &task_pool.pool;
-
-        if (!pool.contains(task_id)) {
-            return (b"", 0, 0, 0, false)
-        };
-
-        let TaskConfigItem { name, weight, goal_min, goal_max, is_active } =
-            *pool.borrow(task_id);
-        (name, weight, goal_min, goal_max, is_active)
+        
+        if (task_pool.task_configs.contains(task_atom_id)) {
+            *task_pool.task_configs.borrow(task_atom_id)
+        } else {
+            TaskConfig { goal_config: simple_map::new(), is_active: false }
+        }
     }
 
     // 单元测试 (Unit Tests) --------------------------------------------
