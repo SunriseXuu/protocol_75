@@ -187,7 +187,7 @@ module protocol_75::task_market {
         goal_maxs: vector<u64>,
         is_active: bool
     ) acquires TaskPool {
-        // 鉴权检查
+        // 鉴权检查是否是管理员调用
         assert!(signer::address_of(admin) == ADMIN_ADDR, E_NOT_ADMIN);
 
         // 检查参数长度一致性
@@ -196,7 +196,7 @@ module protocol_75::task_market {
         assert!(goal_mins.length() == len, E_INVALID_TASK_EDGES);
         assert!(goal_maxs.length() == len, E_INVALID_TASK_EDGES);
 
-        // 检查参数边界并构建 goal_config
+        // 构建 goal_config
         let goal_config = simple_map::new();
         let i = 0;
         while (i < len) {
@@ -205,6 +205,7 @@ module protocol_75::task_market {
             let goal_min = goal_mins[i];
             let goal_max = goal_maxs[i];
 
+            // 检查参数边界
             assert!(goal_min <= goal_max, E_INVALID_TASK_EDGES);
 
             goal_config.add(
@@ -257,9 +258,8 @@ module protocol_75::task_market {
         // 检查任务是否处于启用状态
         assert!(task_config.is_active, E_TASK_DISABLED);
 
-        // 检查参数边界并构建 goal
+        // 循环遍历目标 ID 列表，构建 goal_params 映射
         let goal_params = simple_map::new();
-
         let i = 0;
         while (i < len) {
             let goal_id = goal_ids[i];
@@ -312,7 +312,7 @@ module protocol_75::task_market {
     ): u64 {
         let total_difficulty = 0;
 
-        // 遍历任务原子列表
+        // 遍历任务原子列表，计算每日至少所需的能量值
         let i = 0;
         while (i < task_atoms.length()) {
             let task_atom = task_atoms.borrow(i);
@@ -335,7 +335,7 @@ module protocol_75::task_market {
             i += 1;
         };
 
-        // 将总能量值乘以全局能量放大系数
+        // 将总能量值乘以全局能量放大系数，并返回
         ENERGY_SCALING_FACTOR * total_difficulty
     }
 
@@ -344,12 +344,12 @@ module protocol_75::task_market {
     #[view]
     /// 视图函数：获取任务配置 (Get Task Config)
     /// 提供查询接口，允许外部调用者获取特定任务原子 ID 的配置
-    /// 
+    ///
     /// @param task_atom_id 任务原子 ID
     /// @return 任务配置
     public fun get_task_config(task_atom_id: u8): TaskConfig acquires TaskPool {
         let task_pool = borrow_global<TaskPool>(ADMIN_ADDR);
-        
+
         if (task_pool.task_configs.contains(task_atom_id)) {
             *task_pool.task_configs.borrow(task_atom_id)
         } else {
