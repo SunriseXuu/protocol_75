@@ -158,7 +158,7 @@ module protocol_75::task_market {
         );
 
         // 默认任务3. 正念冥想 (Mindful Meditation)
-        // 目标1. 冥想时长 (Meditation Duration)：每单位权重 5，合理范围 10-120 分钟
+        // 目标1. 冥想时长 (Meditation Duration)：每单位权重 5，合理范围 10-120 分钟 
         let goal_config3 = simple_map::new();
         goal_config3.add(
             GOAL_MEDITATION_DURATION,
